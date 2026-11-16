@@ -1,6 +1,6 @@
-# Subscription accounts (CLI adapter sidecars)
+# Subscription providers (CLI adapter sidecars)
 
-The proxy speaks OpenAI-compatible HTTP to its pools and knows nothing about vendor CLIs. To use a Claude subscription login, run a **CLI adapter** as a sidecar container in the same pod: one adapter per account. Each adapter is its own pool.
+The proxy speaks OpenAI-compatible HTTP to its pools and knows nothing about vendor CLIs. To use a Claude subscription login, run a **CLI adapter** as a sidecar container in the same pod: one adapter per provider. Each adapter is its own pool.
 
 ```
 pod
@@ -21,16 +21,16 @@ This is meant for a single user running their own subscription. Vendor terms for
 ## Helm configuration
 
 ```yaml
-accounts:
+providers:
   claude-subscription:
     type: claude          # only "claude" is supported
     maxConcurrency: 4     # becomes the pool's max_concurrency (default 4)
-    # port: 9100          # default: accountsBasePort (9100) + index in name order
-    # storage: {size: 1Gi, storageClass: ""}   # overrides accountStorage
+    # port: 9100          # default: providersBasePort (9100) + index in name order
+    # storage: {size: 1Gi, storageClass: ""}   # overrides providerStorage
     # resources: {}
     # env: []
 
-accountStorage: {size: 1Gi, storageClass: ""}   # defaults for every account
+providerStorage: {size: 1Gi, storageClass: ""}   # defaults for every provider
 adapters:
   claude:
     image: {repository: ghcr.io/lerenn/llm-proxy-manifestd-adapter-claude, tag: ""}  # tag defaults to appVersion
@@ -45,21 +45,21 @@ config:
     frontier-high:   {endpoints: {anthropic: {pools: [claude-subscription], target_model: "claude-fable-5-2@high",    priority: 90}}}
 ```
 
-For every entry in `accounts` the chart renders:
+For every entry in `providers` the chart renders:
 
-- one sidecar container named after the account, listening on `127.0.0.1:<port>`; ports are assigned deterministically (`accountsBasePort` + index of the account in alphabetical order) unless `port` is set;
-- one PVC `<release>-<account>` mounted at `/data/claude` (`CLAUDE_CONFIG_DIR`), holding the login;
-- a pool with the account's name (`upstream_url: http://localhost:<port>`, `max_concurrency`, and `protocol: anthropic` for claude accounts when ``) merged into `config.pools`. A clash with a user-defined pool of the same name fails the render.
+- one sidecar container named after the provider, listening on `127.0.0.1:<port>`; ports are assigned deterministically (`providersBasePort` + index of the provider in alphabetical order) unless `port` is set;
+- one PVC `<release>-<provider>` mounted at `/data/claude` (`CLAUDE_CONFIG_DIR`), holding the login;
+- a pool with the provider's name (`upstream_url: http://localhost:<port>`, `max_concurrency`, and `protocol: anthropic` for claude providers when ``) merged into `config.pools`. A clash with a user-defined pool of the same name fails the render.
 
-The chart's example pool and routes (`defaultPools`/`defaultRoutes`) are only applied when `accounts` is empty, so they never interfere with account setups.
+The chart's example pool and routes (`defaultPools`/`defaultRoutes`) are only applied when `providers` is empty, so they never interfere with provider setups.
 
-Spread a route over several accounts with `pools: [claude-a, claude-b]` (see [Multi-pool routing](./multi-pool-routing)).
+Spread a route over several providers with `pools: [claude-a, claude-b]` (see [Multi-pool routing](./multi-pool-routing)).
 
-When at least one account exists the Deployment uses `replicas: 1` and `strategy: Recreate`, `automountServiceAccountToken: false`, non-root users (65532 for the proxy, 10001 for adapters), `readOnlyRootFilesystem`, all capabilities dropped, a `check-config` init container that runs `/checker -f` on the rendered config (from the proxy image), and a per-container readiness probe. With `accounts: {}` the chart renders exactly as before.
+When at least one provider exists the Deployment uses `replicas: 1` and `strategy: Recreate`, `automountServiceAccountToken: false`, non-root users (65532 for the proxy, 10001 for adapters), `readOnlyRootFilesystem`, all capabilities dropped, a `check-config` init container that runs `/checker -f` on the rendered config (from the proxy image), and a per-container readiness probe. With `providers: {}` the chart renders exactly as before.
 
 ## Login
 
-The adapter is not ready (`GET /ready` returns 503, so the pod is not Ready and requests get 503) until credentials exist. Log in once per account:
+The adapter is not ready (`GET /ready` returns 503, so the pod is not Ready and requests get 503) until credentials exist. Log in once per provider:
 
 ```sh
 kubectl exec -it deploy/<release>-llm-proxy-manifestd -c claude-subscription -- claude
@@ -76,8 +76,8 @@ Each request runs a fresh `claude` process (`-p`, `--input-format/--output-forma
 
 ## Operations
 
-- **Rollout means a brief outage.** `Recreate` stops the old pod before starting the new one (a login volume is ReadWriteOnce and an account must not run twice).
-- **Adding or removing an account restarts the pod** (it changes the pod spec). Edits to `config` alone (routes, priorities) hot-reload without a restart.
+- **Rollout means a brief outage.** `Recreate` stops the old pod before starting the new one (a login volume is ReadWriteOnce and a provider must not run twice).
+- **Adding or removing a provider restarts the pod** (it changes the pod spec). Edits to `config` alone (routes, priorities) hot-reload without a restart.
 - Uninstalling the release deletes the PVCs and therefore the logins.
 
 ## Security notes

@@ -2,7 +2,7 @@
   Intentionally no checksum/config annotation: the ConfigMap is mounted as a
   directory (no subPath) and the proxy hot-reloads it without a pod restart.
 */ -}}
-{{- $accounts := include "llm-proxy-manifestd.accounts" . | fromJsonArray -}}
+{{- $providers := include "llm-proxy-manifestd.providers" . | fromJsonArray -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -10,8 +10,8 @@ metadata:
   labels:
     {{- include "llm-proxy-manifestd.labels" . | nindent 4 }}
 spec:
-  {{- if $accounts }}
-  # Accounts hold a login on a ReadWriteOnce volume: exactly one pod, and the
+  {{- if $providers }}
+  # Providers hold a login on a ReadWriteOnce volume: exactly one pod, and the
   # old pod must be gone before the new one starts (brief outage on rollout).
   replicas: 1
   strategy:
@@ -32,7 +32,7 @@ spec:
       labels:
         {{- include "llm-proxy-manifestd.selectorLabels" . | nindent 8 }}
     spec:
-      {{- if $accounts }}
+      {{- if $providers }}
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
@@ -41,7 +41,7 @@ spec:
           type: RuntimeDefault
       {{- end }}
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
-      {{- if $accounts }}
+      {{- if $providers }}
       initContainers:
         # Fail the rollout early on an invalid config (pools, routes, endpoints).
         - name: check-config
@@ -94,7 +94,7 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if $accounts }}
+          {{- if $providers }}
           securityContext:
             runAsUser: 65532
             allowPrivilegeEscalation: false
@@ -106,10 +106,10 @@ spec:
             - name: config
               mountPath: /etc/llm-proxy-manifestd
               readOnly: true
-        {{- range $accounts }}
-        {{- $a := .account }}
+        {{- range $providers }}
+        {{- $a := .provider }}
         {{- $img := $.Values.adapters.claude.image }}
-        # Account {{ .name }}: loopback-only adapter; its pool in the ConfigMap
+        # Provider {{ .name }}: loopback-only adapter; its pool in the ConfigMap
         # points at http://localhost:{{ .port }}.
         - name: {{ .name }}
           image: "{{ $img.repository }}:{{ $img.tag | default $.Chart.AppVersion }}"
@@ -148,11 +148,11 @@ spec:
         - name: config
           configMap:
             name: {{ include "llm-proxy-manifestd.fullname" . }}
-        {{- if $accounts }}
+        {{- if $providers }}
         - name: tmp
           emptyDir: {}
         {{- end }}
-        {{- range $accounts }}
+        {{- range $providers }}
         - name: login-{{ .name }}
           persistentVolumeClaim:
             claimName: {{ include "llm-proxy-manifestd.fullname" $ }}-{{ .name }}
