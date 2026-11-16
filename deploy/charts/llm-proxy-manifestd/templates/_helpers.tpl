@@ -28,7 +28,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{/*
-Providers: entries of .Values.providers. Type claude = CLI adapter sidecar (+PVC);
+Providers: entries of .Values.providers. Types claude / codex = CLI adapter sidecar (+PVC);
 types anthropic-api / openai-api = pool only (no container).
 Returns a JSON list [{name, type, port, maxConcurrency, ...}] sorted by name.
 Ports are deterministic: providersBasePort + index among sidecar providers in name order, unless the
@@ -52,8 +52,11 @@ provider sets `port` explicitly.
 {{- fail (printf "providers.%s: name must be a DNS label of at most 30 characters (lowercase letters, digits, '-')" $name) -}}
 {{- end -}}
 {{- $entry := dict "name" $name "type" $type "maxConcurrency" (int ($a.maxConcurrency | default 4)) "provider" $a -}}
-{{- if eq $type "claude" -}}
+{{- if or (eq $type "claude") (eq $type "codex") -}}
 {{- $_ := set $entry "sidecar" true -}}
+{{- $_ := set $entry "protocol" (ternary "anthropic" "openai" (eq $type "claude")) -}}
+{{- $_ := set $entry "homeEnv" (ternary "CLAUDE_CONFIG_DIR" "CODEX_HOME" (eq $type "claude")) -}}
+{{- $_ := set $entry "dataDir" (printf "/data/%s" $type) -}}
 {{- $_ := set $entry "port" (int ($a.port | default (add $base $sidecars))) -}}
 {{- $sidecars = add1 $sidecars -}}
 {{- else if or (eq $type "anthropic-api") (eq $type "openai-api") -}}
@@ -69,7 +72,7 @@ provider sets `port` explicitly.
 {{- $_ := set $entry "secretKey" $sec.key -}}
 {{- $_ := set $entry "envName" (printf "PROVIDER_%s_API_KEY" (upper (replace "-" "_" $name))) -}}
 {{- else -}}
-{{- fail (printf "providers.%s: unsupported type %q (valid types: claude, anthropic-api, openai-api; codex is planned, not implemented)" $name $type) -}}
+{{- fail (printf "providers.%s: unsupported type %q (valid types: claude, codex, anthropic-api, openai-api)" $name $type) -}}
 {{- end -}}
 {{- $out = append $out $entry -}}
 {{- end -}}

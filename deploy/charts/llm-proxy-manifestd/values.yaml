@@ -45,7 +45,7 @@ dashboard:
 
 # CLI adapter sidecars, one per subscription provider (see the "Subscription
 # providers" guide). Each entry renders, in the same pod: one sidecar container
-# listening on 127.0.0.1:<port>, one PVC holding its login at /data/claude, and
+# listening on 127.0.0.1:<port>, one PVC holding its login at /data/<type> (claude: CLAUDE_CONFIG_DIR, codex: CODEX_HOME), and
 # a pool of the same name (upstream_url http://localhost:<port>) merged into
 # config.pools. Reference the pool from config.endpoints targets as usual.
 # Empty = feature off.
@@ -54,7 +54,7 @@ dashboard:
 # service account token and runs every container non-root with a read-only
 # root filesystem. Adding or removing a provider restarts the pod.
 #
-# Types: claude (sidecar + PVC), anthropic-api and openai-api (pool only: no
+# Types: claude, codex (experimental) (sidecar + PVC), anthropic-api and openai-api (pool only: no
 # container, no PVC; the API key comes from an existing Secret). Only sidecar
 # providers force replicas 1 / Recreate / hardening.
 #   my-anthropic:
@@ -65,11 +65,11 @@ dashboard:
 #     # openai-api works the same (default url https://api.openai.com)
 # providers:
 #   claude-subscription:
-#     type: claude            # only "claude" is supported
+#     type: claude            # claude | codex | anthropic-api | openai-api
 #     maxConcurrency: 4       # pool max_concurrency (default 4)
 #     # port: 9100            # default: providersBasePort + index in name order
 #     # storage: {size: 1Gi, storageClass: ""}   # overrides providerStorage
-#     # resources: {}         # overrides adapters.claude.resources
+#     # resources: {}         # overrides adapters.<type>.resources
 #     # env: []               # extra container env entries
 providers: {}
 
@@ -86,6 +86,12 @@ adapters:
     image:
       repository: ghcr.io/lerenn/llm-proxy-manifestd-adapter-claude
       # Defaults to the chart appVersion (adapter and proxy are released together).
+      tag: ""
+      pullPolicy: IfNotPresent
+    resources: {}
+  codex:   # experimental
+    image:
+      repository: ghcr.io/lerenn/llm-proxy-manifestd-adapter-codex
       tag: ""
       pullPolicy: IfNotPresent
     resources: {}

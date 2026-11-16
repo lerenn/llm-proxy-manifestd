@@ -115,6 +115,14 @@ jobs:
           args: publish-adapter-image --name=claude --tag=${{ needs.version.outputs.version }} --registry-user=lerenn --registry-token=env:GITHUB_TOKEN
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish Codex adapter image
+        uses: dagger/dagger-for-github@v7
+        with:
+          version: "0.21.11"
+          verb: call
+          args: publish-adapter-image --name=codex --tag=${{ needs.version.outputs.version }} --registry-user=lerenn --registry-token=env:GITHUB_TOKEN
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish chart
         uses: dagger/dagger-for-github@v7
         with:

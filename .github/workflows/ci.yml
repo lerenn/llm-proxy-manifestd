@@ -24,14 +24,18 @@ jobs:
   adapter-image:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        adapter: [claude, codex]
     steps:
       - uses: actions/checkout@v4
-      - name: Build Claude adapter image
+      - name: Build ${{ matrix.adapter }} adapter image
         uses: dagger/dagger-for-github@v7
         with:
           version: "0.21.11"
           verb: call
-          args: build-adapter --name=claude
+          args: build-adapter --name=${{ matrix.adapter }}
 
   website:
     runs-on: ubuntu-latest

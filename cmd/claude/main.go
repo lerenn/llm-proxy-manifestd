@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/lerenn/llm-proxy-manifestd/internal/adapter/common"
 )
 
 func env(k, d string) string {
@@ -17,24 +19,9 @@ func env(k, d string) string {
 	return d
 }
 
-// probe implements `adapter-claude ready`, for exec readiness probes: the
-// adapter only listens on loopback, which kubelet's httpGet probes cannot reach.
-func probe(addr string) int {
-	c := http.Client{Timeout: 3 * time.Second}
-	resp, err := c.Get("http://" + addr + "/ready")
-	if err != nil {
-		return 1
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return 1
-	}
-	return 0
-}
-
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "ready" {
-		os.Exit(probe(env("ADAPTER_LISTEN", "127.0.0.1:9100")))
+		os.Exit(common.Probe(env("ADAPTER_LISTEN", "127.0.0.1:9100")))
 	}
 	srv := &Server{
 		Bin:       env("CLAUDE_BIN", "claude"),
