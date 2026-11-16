@@ -6,11 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/lerenn/llm-proxy-manifestd/internal/adapter/anthropic"
+	"github.com/lerenn/llm-proxy-manifestd/internal/adapter/common"
 )
 
 // Server is the OpenAI-compatible HTTP front of the Claude CLI.
@@ -30,8 +30,7 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) loggedIn() bool {
-	st, err := os.Stat(filepath.Join(s.ConfigDir, ".credentials.json"))
-	return err == nil && st.Size() > 0
+	return common.NonEmptyFile(filepath.Join(s.ConfigDir, ".credentials.json"))
 }
 
 func (s *Server) ready(w http.ResponseWriter, _ *http.Request) {
@@ -54,7 +53,7 @@ func (s *Server) messages(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid_request_error", "invalid JSON body: "+err.Error())
 		return
 	}
-	model, effort, err := anthropic.SplitModel(req.Model)
+	model, effort, err := common.SplitModel(req.Model)
 	if err != nil || model == "" {
 		msg := "model is required"
 		if err != nil {

@@ -166,6 +166,12 @@ func TestFailoverExhaustedReturnsLastResponse(t *testing.T) {
 		t.Fatalf("status %d hits %d/%d", resp.StatusCode, ha.Load(), hb.Load())
 	}
 	for n, p := range st.Pools {
+		// The slot is released when the proxy finishes copying the response,
+		// which can trail the client seeing it: poll instead of racing.
+		deadline := time.Now().Add(2 * time.Second)
+		for p.Stats().Active != 0 && time.Now().Before(deadline) {
+			time.Sleep(5 * time.Millisecond)
+		}
 		if p.Stats().Active != 0 {
 			t.Fatalf("pool %s leaked a slot", n)
 		}

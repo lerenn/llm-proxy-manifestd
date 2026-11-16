@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"github.com/lerenn/llm-proxy-manifestd/internal/adapter/common"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -142,14 +143,14 @@ func TestProbe(t *testing.T) {
 	ts := httptest.NewServer(s.Handler())
 	defer ts.Close()
 	addr := strings.TrimPrefix(ts.URL, "http://")
-	if probe(addr) != 0 {
+	if common.Probe(addr) != 0 {
 		t.Fatal("expected ready")
 	}
 	s.ConfigDir = t.TempDir()
-	if probe(addr) != 1 {
+	if common.Probe(addr) != 1 {
 		t.Fatal("expected not ready")
 	}
-	if probe("127.0.0.1:1") != 1 {
+	if common.Probe("127.0.0.1:1") != 1 {
 		t.Fatal("expected failure")
 	}
 }

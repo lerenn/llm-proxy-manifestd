@@ -24,7 +24,7 @@ data:
     {{- fail (printf "providers.%s conflicts with a pool of the same name in config.pools" .name) }}
     {{- end }}
     {{- if .sidecar }}
-    {{- $pool := dict "upstream_url" (printf "http://localhost:%d" (int .port)) "max_concurrency" (int .maxConcurrency) "protocol" "anthropic" }}
+    {{- $pool := dict "upstream_url" (printf "http://localhost:%d" (int .port)) "max_concurrency" (int .maxConcurrency) "protocol" .protocol }}
     {{- $_ := set $pools .name $pool }}
     {{- else }}
     {{- $pool := dict "upstream_url" .url "max_concurrency" (int .maxConcurrency) "protocol" .protocol "api_key" (printf "${%s}" .envName) }}

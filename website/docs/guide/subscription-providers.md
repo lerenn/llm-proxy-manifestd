@@ -24,10 +24,10 @@ This is meant for a single user running their own subscription. Vendor terms for
 
 | type | renders | pool `protocol` | notes |
 | :- | :- | :- | :- |
-| `claude` | sidecar container + PVC + pool | `anthropic` | Claude subscription login via the `claude` CLI (this page) |
+| `claude` | sidecar container + PVC + pool | `anthropic` | Claude subscription login via the `claude` CLI |
 | `anthropic-api` | pool only | `anthropic` | Anthropic API key from a Secret |
 | `openai-api` | pool only | `openai` | OpenAI or any OpenAI-compatible gateway, key from a Secret |
-| `codex` | not implemented | `openai` | planned |
+| `codex` | sidecar container + PVC + pool (**experimental**) | `openai` | Codex (ChatGPT) subscription login via `codex app-server` |
 
 Unknown types fail the render. The old `accounts` key (and `accountsBasePort`, `accountStorage`) fails the render with a pointer to `providers`.
 
@@ -78,7 +78,7 @@ config:
 
 Use the default `mode: least-inflight` instead to spread load over both pools (the API pool is then used whenever it has fewer requests in flight).
 
-## Helm configuration (claude sidecar)
+## Helm configuration (claude sidecar; codex is analogous)
 
 ```yaml
 providers:
@@ -110,7 +110,7 @@ For every entry in `providers` the chart renders:
 
 - one sidecar container named after the provider, listening on `127.0.0.1:<port>`; ports are assigned deterministically (`providersBasePort` + index among `claude` providers in alphabetical order) unless `port` is set;
 - one PVC `<release>-<provider>` mounted at `/data/claude` (`CLAUDE_CONFIG_DIR`), holding the login;
-- a pool with the provider's name (`upstream_url: http://localhost:<port>`, `max_concurrency`, and `protocol: anthropic` for claude providers when ``) merged into `config.pools`. A clash with a user-defined pool of the same name fails the render.
+- a pool with the provider's name (`upstream_url: http://localhost:<port>`, `max_concurrency`, and `protocol: anthropic` for claude providers, `protocol: openai` for codex providers) merged into `config.pools`. A clash with a user-defined pool of the same name fails the render.
 
 The chart's example pool and endpoints (`defaultPools`/`defaultEndpoints`) are only applied when `providers` is empty, so they never interfere with provider setups.
 
@@ -156,9 +156,33 @@ Each request runs a fresh `claude` process (`-p`, `--input-format/--output-forma
 - Token usage reported by the adapter is whatever the CLI reports and may not match OpenAI semantics.
 - Image builds pin Claude Code 2.1.325 (sha256-verified); the image contains no Node.js because Claude Code ships as a native binary.
 
-## Codex (not implemented)
+## Codex provider (experimental)
 
-There is no Codex adapter. A design sketch only: a sidecar would spawn `codex app-server` (JSON-RPC over stdio, login dir from `CODEX_HOME`) and expose the same contract. The app-server protocol has **not** been verified, so nothing is implemented.
+```yaml
+providers:
+  codex-subscription: {type: codex, maxConcurrency: 2}
+config:
+  endpoints:
+    openai:
+      fast: {priority: 10, targets: [{pool: codex-subscription, target_model: "gpt-5.4@low"}]}
+```
+
+Codex pools speak the OpenAI protocol, so their endpoints go under `endpoints.openai` (clients call `/v1/chat/completions` on the proxy).
+
+A `codex` provider renders the same pieces as `claude` (loopback sidecar, PVC at `/data/codex` with `CODEX_HOME`, exec readiness probe, pool with `protocol: openai`; ports are shared with Claude sidecars in name order) and follows the same Recreate / hardening rules. The sidecar (`ghcr.io/lerenn/llm-proxy-manifestd-adapter-codex`, command `cmd/codex`) exposes the **OpenAI chat-completions API** (`POST /v1/chat/completions`, streaming SSE and non-stream, plus `GET /ready`; there is no `/v1/models`). The `@low|@medium|@high` suffix is stripped and sent as the turn's `effort`; other suffixes are a 400.
+
+**Login** (headless pod): `kubectl exec -it deploy/<release>-llm-proxy-manifestd -c codex-subscription -- codex login --device-auth`, then follow the printed URL and code. The adapter is ready once `$CODEX_HOME/auth.json` exists (the default `file` credential store; the adapter pins `cli_auth_credentials_store="file"`).
+
+**What it does per request.** It starts `codex -c <tool-disabling overrides> app-server --listen stdio://` with `CODEX_HOME`, then speaks the app-server's newline-delimited JSON-RPC: `initialize`, the `initialized` notification, `thread/start` (`approvalPolicy: "never"`, `sandbox: "read-only"`, `ephemeral: true`, an empty temp `cwd`, the system prompt as `developerInstructions`), `turn/start` (`effort`), then maps `item/agentMessage/delta` to SSE chunks, `thread/tokenUsage/updated` to `usage`, and `turn/completed` / `error` to success or an HTTP error (unauthorized, usage/rate limit and overload become 503 so the proxy fails over; bad request 400; others 502). Server-initiated requests (approvals, tool calls) are refused. If the client disconnects, it sends `turn/interrupt` and stops the process. One fresh thread per request; the process is discarded afterwards.
+
+**Verified from the openai/codex sources (release 0.169.0 era):** the JSON-RPC framing and method/notification names above, the request and response field names, `codex app-server --listen stdio://`, the global `-c key=value` override, `codex login --device-auth`, `auth.json` as the file-store credential, the `codexErrorInfo` values, and the static musl release assets with their sha256 digests.
+
+**Not verified or assumed:**
+- It has **never run against a real Codex login** or a real `codex` binary; it is tested only with a fake app-server script.
+- **Tool disabling is best effort.** The `features.*` keys passed with `-c` (`shell_tool`, `unified_exec`, `view_image`, `apply_patch_freeform`, `js_repl`, `code_mode`) and `web_search="disabled"` exist in the sources, but I could not confirm that together they leave no tool available (other tools, MCP servers from a user `config.toml` on the PVC, or a future feature could remain). The read-only sandbox and `approvalPolicy: never` limit the damage; the read-only sandbox may still allow reading files such as `auth.json` if a shell tool were available. Treat the sidecar as able to act on its container.
+- Whether the Linux sandbox (bubblewrap/landlock) starts inside the hardened container is untested, as is `developerInstructions` semantics for system prompts.
+- Protocol drift: the app-server API is marked experimental upstream and may change between Codex releases; the image pins Codex 0.169.0 (digests from GitHub's release metadata, no Node.js in the image since the binary is a static executable).
+- Models (`/v1/models`) are not served; usage is the thread's reported totals.
 
 ## Also unverified (API-key providers)
 

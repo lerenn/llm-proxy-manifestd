@@ -129,7 +129,7 @@ func adapterImage(source *dagger.Directory, name string, platform dagger.Platfor
 
 // BuildAdapter builds the adapter image (linux/amd64) without publishing it,
 // to catch Dockerfile and binary-download breakage in CI. It also runs
-// `claude --version` inside the image.
+// `<name> --version` (the vendor CLI) inside the image.
 func (m *LlmProxyManifestd) BuildAdapter(
 	ctx context.Context,
 	// +defaultPath="/"
@@ -140,7 +140,7 @@ func (m *LlmProxyManifestd) BuildAdapter(
 	name string,
 ) (string, error) {
 	return adapterImage(source, name, "linux/amd64").
-		WithEntrypoint([]string{"/usr/local/bin/claude"}).
+		WithEntrypoint([]string{"/usr/local/bin/" + name}).
 		WithExec([]string{"--version"}, dagger.ContainerWithExecOpts{UseEntrypoint: true}).
 		Stdout(ctx)
 }

@@ -123,7 +123,8 @@ spec:
               readOnly: true
         {{- range $sidecars }}
         {{- $a := .provider }}
-        {{- $img := $.Values.adapters.claude.image }}
+        {{- $ad := get $.Values.adapters .type }}
+        {{- $img := $ad.image }}
         # Provider {{ .name }}: loopback-only adapter; its pool in the ConfigMap
         # points at http://localhost:{{ .port }}.
         - name: {{ .name }}
@@ -132,15 +133,15 @@ spec:
           env:
             - name: ADAPTER_LISTEN
               value: "127.0.0.1:{{ .port }}"
-            - name: CLAUDE_CONFIG_DIR
-              value: /data/claude
+            - name: {{ .homeEnv }}
+              value: {{ .dataDir }}
             {{- with $a.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           readinessProbe:
             # exec, not httpGet: the adapter listens on loopback only.
             exec:
-              command: ["/usr/local/bin/adapter-claude", "ready"]
+              command: ["/usr/local/bin/adapter-{{ .type }}", "ready"]
             periodSeconds: 10
             timeoutSeconds: 5
           securityContext:
@@ -149,13 +150,13 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
-          {{- with ($a.resources | default $.Values.adapters.claude.resources) }}
+          {{- with ($a.resources | default $ad.resources) }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           volumeMounts:
             - name: login-{{ .name }}
-              mountPath: /data/claude
+              mountPath: {{ .dataDir }}
             - name: tmp
               mountPath: /tmp
         {{- end }}

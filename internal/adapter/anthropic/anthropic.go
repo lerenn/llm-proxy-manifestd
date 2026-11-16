@@ -47,23 +47,6 @@ type Request struct {
 	Stream    bool            `json:"stream"`
 }
 
-// Efforts are the accepted "@effort" model suffixes.
-var Efforts = map[string]bool{"low": true, "medium": true, "high": true}
-
-// SplitModel splits "model@effort" into its parts. The effort is empty when
-// there is no suffix. An unknown suffix is an error.
-func SplitModel(s string) (model, effort string, err error) {
-	i := strings.LastIndex(s, "@")
-	if i < 0 {
-		return s, "", nil
-	}
-	model, effort = s[:i], s[i+1:]
-	if model == "" || !Efforts[effort] {
-		return "", "", fmt.Errorf("invalid model %q: suffix must be @low, @medium or @high", s)
-	}
-	return model, effort, nil
-}
-
 // Prompt flattens a request into (system prompt, single user prompt).
 // A lone user message is passed through unchanged; longer conversations are
 // rendered as a labelled transcript.
