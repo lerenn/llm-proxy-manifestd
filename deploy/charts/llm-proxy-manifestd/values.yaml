@@ -53,6 +53,15 @@ dashboard:
 # service account token and runs every container non-root with a read-only
 # root filesystem. Adding or removing a provider restarts the pod.
 #
+# Types: claude (sidecar + PVC), anthropic-api and openai-api (pool only: no
+# container, no PVC; the API key comes from an existing Secret). Only sidecar
+# providers force replicas 1 / Recreate / hardening.
+#   my-anthropic:
+#     type: anthropic-api     # pool protocol: anthropic
+#     url: https://api.anthropic.com   # default; no trailing /v1 (client paths already include it)
+#     maxConcurrency: 4
+#     apiKey: {existingSecret: {name: my-secret, key: anthropic-key}}   # required
+#     # openai-api works the same (default url https://api.openai.com)
 # providers:
 #   claude-subscription:
 #     type: claude            # only "claude" is supported

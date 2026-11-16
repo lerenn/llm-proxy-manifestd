@@ -17,9 +17,13 @@ data:
     {{- if hasKey $pools .name }}
     {{- fail (printf "providers.%s conflicts with a pool of the same name in config.pools" .name) }}
     {{- end }}
-    {{- $pool := dict "upstream_url" (printf "http://localhost:%d" (int .port)) "max_concurrency" (int .maxConcurrency) }}
-    {{- $_ := set $pool "protocol" (ternary "anthropic" "openai" (eq .type "claude")) }}
+    {{- if .sidecar }}
+    {{- $pool := dict "upstream_url" (printf "http://localhost:%d" (int .port)) "max_concurrency" (int .maxConcurrency) "protocol" "anthropic" }}
     {{- $_ := set $pools .name $pool }}
+    {{- else }}
+    {{- $pool := dict "upstream_url" .url "max_concurrency" (int .maxConcurrency) "protocol" .protocol "api_key" (printf "${%s}" .envName) }}
+    {{- $_ := set $pools .name $pool }}
+    {{- end }}
     {{- end }}
     {{- if $pools }}
     {{- $_ := set $cfg "pools" $pools }}

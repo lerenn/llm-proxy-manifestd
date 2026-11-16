@@ -1,4 +1,5 @@
 {{- range (include "llm-proxy-manifestd.providers" . | fromJsonArray) }}
+{{- if .sidecar }}
 {{- $st := .provider.storage | default dict }}
 ---
 apiVersion: v1
@@ -16,4 +17,5 @@ spec:
   resources:
     requests:
       storage: {{ $st.size | default $.Values.providerStorage.size }}
+{{- end }}
 {{- end }}
