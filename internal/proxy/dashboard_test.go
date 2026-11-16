@@ -17,8 +17,9 @@ server: {queue_timeout: "5s"}
 dashboard: %s
 pools:
   p: {upstream_url: "https://user:hunter2pass@api.example.com:8443/v1/secretpath?token=qtoken", api_key: "sk-SUPERSECRET", max_concurrency: 2}
-routes:
-  fast: {pool: p, target_model: real-model, priority: 100}
+endpoints:
+  openai:
+    fast: {priority: 100, targets: [{pool: p, target_model: real-model}]}
 `
 
 func dashState(t *testing.T, dash string) *config.RuntimeState {

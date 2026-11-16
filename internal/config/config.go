@@ -47,8 +47,20 @@ type Config struct {
 	Server    ServerConfig          `yaml:"server"`
 	Dashboard DashboardConfig       `yaml:"dashboard"`
 	Pools     map[string]PoolConfig `yaml:"pools"`
-	Routes    map[string]Route      `yaml:"routes"`
+	// Endpoints maps protocol ("anthropic" or "openai") to endpoint name (the
+	// client-facing model name) to its definition.
+	Endpoints map[string]map[string]Endpoint `yaml:"endpoints"`
+
+	// LegacyRoutes catches the removed top-level "routes:" key so it fails
+	// with a pointer to the new form instead of a generic decode error.
+	LegacyRoutes present `yaml:"routes"`
 }
+
+// present records that a key was set, whatever its value.
+type present bool
+
+// UnmarshalYAML implements yaml.Unmarshaler.
+func (p *present) UnmarshalYAML(*yaml.Node) error { *p = true; return nil }
 
 // ServerConfig holds server-wide settings.
 type ServerConfig struct {
@@ -87,7 +99,7 @@ type PoolConfig struct {
 	APIKey         string `yaml:"api_key"`
 	MaxConcurrency int    `yaml:"max_concurrency"`
 	// Protocol is the API the upstream speaks: "openai" (default) or
-	// "anthropic". It decides which route endpoint may use the pool and how
+	// "anthropic". It decides which endpoints may target the pool and how
 	// the API key is injected.
 	Protocol string `yaml:"protocol"`
 
@@ -104,44 +116,98 @@ const (
 // Protocols lists the supported protocols.
 var Protocols = []string{ProtocolAnthropic, ProtocolOpenAI}
 
-// Endpoint is how a route is served for one protocol: an ordered list of pools
-// (all of that protocol), the model name sent upstream and a queue priority.
+// Endpoint selection modes.
+const (
+	// ModeLeastInflight takes a free slot on the target with the fewest
+	// in-flight requests (ties: list order), else queues on the least loaded.
+	ModeLeastInflight = "least-inflight"
+	// ModeRoundRobin rotates the starting target per request; the first
+	// target with a free slot in rotation order wins, else the request
+	// queues on the rotation's first target.
+	ModeRoundRobin = "round-robin"
+	// ModeFailover always uses the first remaining target (queuing on it when
+	// busy); later targets are only used when an attempt fails.
+	ModeFailover = "failover"
+)
+
+// Modes lists the supported endpoint modes.
+var Modes = []string{ModeLeastInflight, ModeRoundRobin, ModeFailover}
+
+// Endpoint is a client-facing model name served for one protocol: an
+// ordered list of targets, a selection mode and a default queue priority.
+type Endpoint struct {
+	// Mode is one of Modes; it defaults to least-inflight.
+	Mode string `yaml:"mode"`
+	// Priority is the queue priority (higher first). Defaults to 0.
+	Priority int      `yaml:"priority"`
+	Targets  []Target `yaml:"targets"`
+}
+
+// Target is one pool an endpoint may send requests to.
 //
 // TargetModel is passed upstream verbatim as an opaque string; a suffix such
-// as "@medium" has no meaning to the proxy.
-type Endpoint struct {
-	Pool        string   `yaml:"pool"`
-	Pools       []string `yaml:"pools"`
-	TargetModel string   `yaml:"target_model"`
-	Priority    int      `yaml:"priority"`
+// as "@medium" has no meaning to the proxy. Empty keeps the client's model.
+type Target struct {
+	Pool        string `yaml:"pool"`
+	TargetModel string `yaml:"target_model"`
+	// Priority, when set, overrides the endpoint priority for requests
+	// queued on this target.
+	Priority *int `yaml:"priority"`
 }
 
-// Route maps a client-facing model name to per-protocol endpoints. Either use
-// the shorthand (pool/pools, target_model, priority), which defines the
-// "openai" endpoint, or the explicit Endpoints map, never both. After
-// validation Endpoints is always populated and the shorthand fields are
-// cleared.
-type Route struct {
-	Pool        string              `yaml:"pool"`
-	Pools       []string            `yaml:"pools"`
-	TargetModel string              `yaml:"target_model"`
-	Priority    int                 `yaml:"priority"`
-	Endpoints   map[string]Endpoint `yaml:"endpoints"`
+// QueuePriority returns the queue priority of target i of e.
+func (e Endpoint) QueuePriority(i int) int {
+	if p := e.Targets[i].Priority; p != nil {
+		return *p
+	}
+	return e.Priority
 }
 
-// Endpoint returns the route's endpoint for protocol.
-func (r Route) Endpoint(protocol string) (Endpoint, bool) {
-	e, ok := r.Endpoints[protocol]
+// Endpoint returns the endpoint named name for protocol.
+func (c *Config) Endpoint(protocol, name string) (Endpoint, bool) {
+	e, ok := c.Endpoints[protocol][name]
 	return e, ok
 }
 
-// EndpointProtocols returns the protocols the route serves, sorted.
-func (r Route) EndpointProtocols() []string {
-	out := make([]string, 0, len(r.Endpoints))
-	for p := range r.Endpoints {
-		out = append(out, p)
+// EndpointNames returns the sorted endpoint names of protocol.
+func (c *Config) EndpointNames(protocol string) []string {
+	names := make([]string, 0, len(c.Endpoints[protocol]))
+	for n := range c.Endpoints[protocol] {
+		names = append(names, n)
 	}
-	sort.Strings(out)
+	sort.Strings(names)
+	return names
+}
+
+// EndpointCount returns the number of endpoints over all protocols.
+func (c *Config) EndpointCount() int {
+	n := 0
+	for _, eps := range c.Endpoints {
+		n += len(eps)
+	}
+	return n
+}
+
+// Warnings returns non-fatal remarks about a valid config. When both
+// protocols define endpoints, a name present under only one of them is
+// reported: clients of the other API get 404 endpoint_not_configured for it.
+// A config serving a single protocol produces no such warning.
+func (c *Config) Warnings() []string {
+	a, o := c.Endpoints[ProtocolAnthropic], c.Endpoints[ProtocolOpenAI]
+	if len(a) == 0 || len(o) == 0 {
+		return nil
+	}
+	var out []string
+	for _, n := range c.EndpointNames(ProtocolAnthropic) {
+		if _, ok := o[n]; !ok {
+			out = append(out, fmt.Sprintf("endpoint %q exists under anthropic but not openai: OpenAI clients get 404 for it", n))
+		}
+	}
+	for _, n := range c.EndpointNames(ProtocolOpenAI) {
+		if _, ok := a[n]; !ok {
+			out = append(out, fmt.Sprintf("endpoint %q exists under openai but not anthropic: Anthropic clients get 404 for it", n))
+		}
+	}
 	return out
 }
 
@@ -184,6 +250,9 @@ func (c *Config) validate() error {
 	if c.Server.AgingInterval < 0 {
 		return errors.New("server.aging_interval must not be negative")
 	}
+	if c.LegacyRoutes {
+		return errors.New(legacyRoutesError)
+	}
 	d := &c.Dashboard
 	if d.Path == "" {
 		d.Path = "/dashboard"
@@ -222,73 +291,65 @@ func (c *Config) validate() error {
 		p.Parsed = u
 		c.Pools[name] = p
 	}
-	for name, r := range c.Routes {
-		short := r.Pool != "" || r.Pools != nil || r.TargetModel != "" || r.Priority != 0
-		switch {
-		case short && r.Endpoints != nil:
-			return fmt.Errorf("route %q: endpoints cannot be combined with pool/pools/target_model/priority", name)
-		case r.Endpoints == nil:
-			if !short {
-				return fmt.Errorf("route %q: one of pool, pools or endpoints is required", name)
-			}
-			r.Endpoints = map[string]Endpoint{ProtocolOpenAI: {
-				Pool: r.Pool, Pools: r.Pools, TargetModel: r.TargetModel, Priority: r.Priority,
-			}}
-		case len(r.Endpoints) == 0:
-			return fmt.Errorf("route %q: endpoints must not be empty", name)
+	for proto, eps := range c.Endpoints {
+		if proto != ProtocolOpenAI && proto != ProtocolAnthropic {
+			return fmt.Errorf("endpoints: unknown protocol %q (want anthropic or openai)", proto)
 		}
-		for proto, e := range r.Endpoints {
-			if proto != ProtocolOpenAI && proto != ProtocolAnthropic {
-				return fmt.Errorf("route %q: unknown endpoint protocol %q (want anthropic or openai)", name, proto)
+		for name, e := range eps {
+			if strings.TrimSpace(name) == "" {
+				return fmt.Errorf("endpoints.%s: endpoint name must not be empty", proto)
 			}
-			if err := c.validateEndpoint(fmt.Sprintf("route %q endpoint %q", name, proto), proto, &e); err != nil {
+			if err := c.validateEndpoint(fmt.Sprintf("endpoints.%s.%s", proto, name), proto, &e); err != nil {
 				return err
 			}
-			r.Endpoints[proto] = e
+			eps[name] = e
 		}
-		r.Pool, r.Pools, r.TargetModel, r.Priority = "", nil, "", 0
-		c.Routes[name] = r
 	}
 	return nil
 }
+
+// legacyRoutesError explains the removal of the top-level routes key.
+const legacyRoutesError = "the top-level `routes:` key was removed: declare endpoints per protocol instead, e.g.\n" +
+	"  endpoints:\n" +
+	"    openai:      # or anthropic (/v1/messages)\n" +
+	"      <name>:    # the model name clients send\n" +
+	"        mode: least-inflight   # or round-robin, failover\n" +
+	"        priority: 50\n" +
+	"        targets:\n" +
+	"          - {pool: <pool>, target_model: <upstream model>}\n" +
+	"see https://llm-proxy-manifestd.lerenn.dev/guide/protocol-endpoints"
 
 func (c *Config) validateEndpoint(label, proto string, e *Endpoint) error {
-	switch {
-	case e.Pool != "" && e.Pools != nil:
-		return fmt.Errorf("%s: pool and pools are mutually exclusive", label)
-	case e.Pools != nil && len(e.Pools) == 0:
-		return fmt.Errorf("%s: pools must not be empty", label)
-	case e.Pool == "" && e.Pools == nil:
-		return fmt.Errorf("%s: one of pool or pools is required", label)
-	case e.Pools == nil:
-		e.Pools = []string{e.Pool}
+	switch e.Mode {
+	case "":
+		e.Mode = ModeLeastInflight
+	case ModeLeastInflight, ModeRoundRobin, ModeFailover:
+	default:
+		return fmt.Errorf("%s: unknown mode %q (want %s)", label, e.Mode, strings.Join(Modes, ", "))
 	}
-	e.Pool = ""
-	seen := make(map[string]bool, len(e.Pools))
-	for _, pn := range e.Pools {
-		pc, ok := c.Pools[pn]
+	if len(e.Targets) == 0 {
+		return fmt.Errorf("%s: targets must list at least one {pool, target_model}", label)
+	}
+	type key struct{ pool, model string }
+	seen := make(map[key]bool, len(e.Targets))
+	for i, t := range e.Targets {
+		if t.Pool == "" {
+			return fmt.Errorf("%s: targets[%d]: pool is required", label, i)
+		}
+		pc, ok := c.Pools[t.Pool]
 		if !ok {
-			return fmt.Errorf("%s: unknown pool %q", label, pn)
+			return fmt.Errorf("%s: targets[%d]: unknown pool %q", label, i, t.Pool)
 		}
-		if seen[pn] {
-			return fmt.Errorf("%s: duplicate pool %q", label, pn)
-		}
-		seen[pn] = true
 		if pc.Protocol != proto {
-			return fmt.Errorf("%s: pool %q has protocol %q, want %q", label, pn, pc.Protocol, proto)
+			return fmt.Errorf("%s: targets[%d]: pool %q has protocol %q, want %q", label, i, t.Pool, pc.Protocol, proto)
 		}
+		k := key{t.Pool, t.TargetModel}
+		if seen[k] {
+			return fmt.Errorf("%s: targets[%d]: duplicate target (pool %q, target_model %q)", label, i, t.Pool, t.TargetModel)
+		}
+		seen[k] = true
 	}
 	return nil
-}
-
-// RouteNames returns the sorted route names.
-func (c *Config) RouteNames() []string {
-	names := make([]string, 0, len(c.Routes))
-	for n := range c.Routes {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	return names
 }
 
 // RuntimeState is an immutable snapshot of the active configuration together
@@ -366,7 +427,7 @@ func (l *Loader) Reload() (err error) {
 	}
 	l.state.Store(buildState(cfg, prev))
 	l.lastRaw = raw
-	l.logger.Info("config loaded", "path", l.path, "pools", len(cfg.Pools), "routes", len(cfg.Routes))
+	l.logger.Info("config loaded", "path", l.path, "pools", len(cfg.Pools), "endpoints", cfg.EndpointCount())
 	return nil
 }
 

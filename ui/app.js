@@ -70,15 +70,13 @@
       return [[p.name + (p.protocol ? ' (' + p.protocol + ')' : '')], [p.upstream], [p.active_slots + ' / ' + p.max_concurrency, 'num'],
         [n(p.queued), 'num'], [q], [n(p.total_served), 'num']];
     }), 6);
-    fill($('routes'), s.routes.map(function (x) {
-      var eps = x.endpoints || [{protocol: 'openai', pools: x.pools || [x.pool], upstreams: x.upstreams || [x.upstream], target_model: x.target_model, priority: x.priority}];
-      var name = x.name + ' [' + eps.map(function (e) { return e.protocol; }).join(', ') + ']';
-      var pls = eps.map(function (e) { return e.protocol + ': ' + e.pools.join(', ') + (e.target_model ? ' → ' + e.target_model : ''); }).join(' | ');
-      var ups = eps.map(function (e) { return e.protocol + ': ' + e.upstreams.join(', '); }).join(' | ');
-      var prio = eps.map(function (e) { return e.priority; }).join(' / ');
-      return [[name], [pls], [ups], [prio, 'num'], [n(x.in_flight), 'num'],
+    fill($('endpoints'), (s.endpoints || []).map(function (x) {
+      var tg = x.targets.map(function (t) { return t.pool + (t.target_model ? ' → ' + t.target_model : ''); }).join(', ');
+      var ups = x.targets.map(function (t) { return t.upstream; }).join(', ');
+      var prio = x.targets.map(function (t) { return t.priority; }).join(' / ');
+      return [[x.name], [x.protocol], [x.mode], [tg], [ups], [prio, 'num'], [n(x.in_flight), 'num'],
         [n(x.queued), 'num'], [n(x.requests), 'num'], [n(x.errors), 'num' + (x.errors ? ' err' : '')]];
-    }), 8);
+    }), 10);
     $('updated').textContent = 'updated ' + now.toLocaleTimeString();
   }
 

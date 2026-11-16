@@ -21,24 +21,41 @@ func check(t *testing.T, yml string) (int, string, string) {
 
 func TestCheckerValidUnsetEnv(t *testing.T) {
 	os.Unsetenv("NOPE_KEY")
-	code, out, _ := check(t, "pools:\n  p: {upstream_url: 'http://x', api_key: '${NOPE_KEY}', max_concurrency: 1}\nroutes:\n  r: {pool: p}\n")
-	if code != 0 || !strings.Contains(out, "1 pools, 1 routes") {
+	code, out, _ := check(t, "pools:\n  p: {upstream_url: 'http://x', api_key: '${NOPE_KEY}', max_concurrency: 1}\nendpoints:\n  openai:\n    r: {targets: [{pool: p}]}\n")
+	if code != 0 || !strings.Contains(out, "1 pools, 0 anthropic endpoints, 1 openai endpoints") {
 		t.Fatalf("code=%d out=%q", code, out)
 	}
 }
 
 func TestCheckerInvalidNoSecret(t *testing.T) {
 	t.Setenv("K", "topsecret")
-	code, out, errs := check(t, "pools:\n  p: {upstream_url: 'http://u:topsecret@', api_key: '${K}', max_concurrency: 1}\nroutes:\n  r: {pool: zz}\n")
+	code, out, errs := check(t, "pools:\n  p: {upstream_url: 'http://u:topsecret@', api_key: '${K}', max_concurrency: 1}\nendpoints:\n  openai:\n    r: {targets: [{pool: zz}]}\n")
 	if code != 1 || strings.Contains(out+errs, "topsecret") || errs == "" {
 		t.Fatalf("code=%d out=%q err=%q", code, out, errs)
 	}
 }
 
 func TestCheckerEndpointErrors(t *testing.T) {
-	code, _, errs := check(t, "pools:\n  p: {upstream_url: 'http://x', max_concurrency: 1}\nroutes:\n  r: {endpoints: {anthropic: {pools: [p]}}}\n")
+	code, _, errs := check(t, "pools:\n  p: {upstream_url: 'http://x', max_concurrency: 1}\nendpoints:\n  anthropic:\n    r: {targets: [{pool: p}]}\n")
 	if code != 1 || !strings.Contains(errs, "protocol") {
 		t.Fatalf("code=%d err=%q", code, errs)
+	}
+}
+
+func TestCheckerLegacyRoutesRejected(t *testing.T) {
+	code, _, errs := check(t, "pools:\n  p: {upstream_url: 'http://x', max_concurrency: 1}\nroutes:\n  r: {pool: p}\n")
+	if code != 1 || !strings.Contains(errs, "routes") || !strings.Contains(errs, "endpoints:") {
+		t.Fatalf("code=%d err=%q", code, errs)
+	}
+}
+
+func TestCheckerWarnsOnOneSidedName(t *testing.T) {
+	y := "pools:\n  a: {upstream_url: 'http://x', protocol: anthropic, max_concurrency: 1}\n  o: {upstream_url: 'http://y', max_concurrency: 1}\n" +
+		"endpoints:\n  anthropic:\n    both: {targets: [{pool: a}]}\n    aonly: {targets: [{pool: a}]}\n  openai:\n    both: {targets: [{pool: o}]}\n"
+	code, out, errs := check(t, y)
+	if code != 0 || !strings.Contains(out, "config ok") || !strings.Contains(errs, `warning: endpoint "aonly" exists under anthropic but not openai`) ||
+		strings.Contains(errs, `"both"`) {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errs)
 	}
 }
 

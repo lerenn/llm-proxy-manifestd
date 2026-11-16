@@ -28,6 +28,7 @@ export default defineConfig({
           { text: 'Multi-pool routing', link: '/guide/multi-pool-routing' },
           { text: 'Protocol endpoints & checker', link: '/guide/protocol-endpoints' },
           { text: 'Subscription providers', link: '/guide/subscription-providers' },
+          { text: 'Using opencode', link: '/guide/opencode' },
           { text: 'Releasing', link: '/guide/releasing' },
         ],
       },

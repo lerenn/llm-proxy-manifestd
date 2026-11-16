@@ -45,7 +45,7 @@ spec:
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       {{- if $providers }}
       initContainers:
-        # Fail the rollout early on an invalid config (pools, routes, endpoints).
+        # Fail the rollout early on an invalid config (pools, endpoints).
         - name: check-config
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}

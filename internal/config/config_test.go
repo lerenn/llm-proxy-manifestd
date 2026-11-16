@@ -21,11 +21,13 @@ pools:
     upstream_url: http://up:8317
     api_key: "${TEST_KEY}"
     max_concurrency: 2
-routes:
-  m:
-    pool: a
-    target_model: gpt-x
-    priority: 10
+endpoints:
+  openai:
+    m:
+      priority: 10
+      targets:
+        - pool: a
+          target_model: gpt-x
 `
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -56,7 +58,7 @@ func TestParseDefaults(t *testing.T) {
 
 func TestValidationErrors(t *testing.T) {
 	cases := map[string]string{
-		"unknown pool":  "pools:\n  a: {upstream_url: 'http://x', max_concurrency: 1}\nroutes:\n  r: {pool: b}\n",
+		"unknown pool":  "pools:\n  a: {upstream_url: 'http://x', max_concurrency: 1}\nendpoints:\n  openai:\n    r: {targets: [{pool: b}]}\n",
 		"zero conc":     "pools:\n  a: {upstream_url: 'http://x', max_concurrency: 0}\n",
 		"bad url":       "pools:\n  a: {upstream_url: 'nope', max_concurrency: 1}\n",
 		"bad duration":  "server: {queue_timeout: 'abc'}\npools:\n  a: {upstream_url: 'http://x', max_concurrency: 1}\n",
@@ -186,54 +188,89 @@ func TestWatchDetectsSymlinkSwap(t *testing.T) {
 
 const twoPools = "pools:\n  a: {upstream_url: 'http://x', max_concurrency: 1}\n  b: {upstream_url: 'http://y', max_concurrency: 1}\n"
 
-func TestRoutePoolsValidation(t *testing.T) {
+func ep(proto, name, body string) string {
+	return "endpoints:\n  " + proto + ":\n    " + name + ": " + body + "\n"
+}
+
+func TestTargetsValidation(t *testing.T) {
 	bad := map[string]string{
-		"both":       "routes:\n  r: {pool: a, pools: [b]}\n",
-		"empty list": "routes:\n  r: {pools: []}\n",
-		"none":       "routes:\n  r: {priority: 1}\n",
-		"unknown":    "routes:\n  r: {pools: [a, zzz]}\n",
-		"duplicate":  "routes:\n  r: {pools: [a, b, a]}\n",
-		"bad field":  "routes:\n  r: {pools: [a], poolz: [b]}\n",
+		"no targets":    ep("openai", "r", "{priority: 1}"),
+		"empty targets": ep("openai", "r", "{targets: []}"),
+		"no pool":       ep("openai", "r", "{targets: [{target_model: x}]}"),
+		"unknown pool":  ep("openai", "r", "{targets: [{pool: a}, {pool: zzz}]}"),
+		"duplicate":     ep("openai", "r", "{targets: [{pool: a, target_model: x}, {pool: b}, {pool: a, target_model: x}]}"),
+		"bad field":     ep("openai", "r", "{targets: [{pool: a, poolz: b}]}"),
+		"old pools key": ep("openai", "r", "{pools: [a]}"),
+		"plural pools":  ep("openai", "r", "{targets: [{pools: [a]}]}"),
+		"bad mode":      ep("openai", "r", "{mode: random, targets: [{pool: a}]}"),
+		"empty name":    ep("openai", "''", "{targets: [{pool: a}]}"),
 	}
 	for name, r := range bad {
 		if _, err := Parse([]byte(twoPools + r)); err == nil {
 			t.Errorf("%s: expected error", name)
 		}
 	}
-	c, err := Parse([]byte(twoPools + "routes:\n  s: {pool: a}\n  m: {pools: [b, a], target_model: 'claude-sonnet-5-5@medium'}\n"))
+	c, err := Parse([]byte(twoPools + `endpoints:
+  openai:
+    s: {targets: [{pool: a}]}
+    m:
+      mode: failover
+      priority: 7
+      targets:
+        - {pool: b, target_model: 'claude-sonnet-5-5@medium'}
+        - {pool: a, target_model: 'other', priority: 99}
+        - {pool: a, target_model: 'third', priority: 0}
+`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := c.Routes["s"].Endpoints["openai"].Pools; len(got) != 1 || got[0] != "a" {
-		t.Fatalf("single pool not normalised: %v", got)
+	s, _ := c.Endpoint("openai", "s")
+	if s.Mode != ModeLeastInflight || s.Priority != 0 || s.QueuePriority(0) != 0 {
+		t.Fatalf("defaults: %+v", s)
 	}
-	if got := c.Routes["m"].Endpoints["openai"].Pools; len(got) != 2 || got[0] != "b" || got[1] != "a" {
-		t.Fatalf("order lost: %v", got)
+	m, _ := c.Endpoint("openai", "m")
+	if m.Mode != ModeFailover || len(m.Targets) != 3 || m.Targets[0].Pool != "b" || m.Targets[0].TargetModel != "claude-sonnet-5-5@medium" {
+		t.Fatalf("order or target_model lost: %+v", m)
 	}
-	if c.Routes["m"].Endpoints["openai"].TargetModel != "claude-sonnet-5-5@medium" {
-		t.Fatal("target_model altered")
+	if m.QueuePriority(0) != 7 || m.QueuePriority(1) != 99 || m.QueuePriority(2) != 0 {
+		t.Fatalf("priorities %d %d %d", m.QueuePriority(0), m.QueuePriority(1), m.QueuePriority(2))
+	}
+	if got := c.EndpointNames("openai"); len(got) != 2 || got[0] != "m" || got[1] != "s" {
+		t.Fatalf("names %v", got)
+	}
+	if _, ok := c.Endpoint("anthropic", "s"); ok {
+		t.Fatal("anthropic endpoint should not exist")
 	}
 }
 
-func TestReloadRoutePools(t *testing.T) {
+func TestLegacyRoutesRejected(t *testing.T) {
+	for _, r := range []string{"routes:\n  r: {pool: a}\n", "routes: {}\n"} {
+		_, err := Parse([]byte(twoPools + r))
+		if err == nil || !strings.Contains(err.Error(), "`routes:` key was removed") || !strings.Contains(err.Error(), "targets:") {
+			t.Errorf("%q: want pointer to endpoints, got %v", r, err)
+		}
+	}
+}
+
+func TestReloadEndpointTargets(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	write(t, path, twoPools+"routes:\n  r: {pool: a}\n")
+	write(t, path, twoPools+ep("openai", "r", "{targets: [{pool: a}]}"))
 	l := NewLoader(path, quiet())
 	if err := l.Reload(); err != nil {
 		t.Fatal(err)
 	}
 	first := l.State()
-	write(t, path, twoPools+"routes:\n  r: {pools: [a, b]}\n")
+	write(t, path, twoPools+ep("openai", "r", "{targets: [{pool: a}, {pool: b}]}"))
 	if err := l.Reload(); err != nil {
 		t.Fatal(err)
 	}
 	second := l.State()
-	if len(second.Config.Routes["r"].Endpoints["openai"].Pools) != 2 || second.Pools["a"] != first.Pools["a"] {
-		t.Fatal("route pools not reloaded or pool instance not preserved")
+	if e, _ := second.Config.Endpoint("openai", "r"); len(e.Targets) != 2 || second.Pools["a"] != first.Pools["a"] {
+		t.Fatal("targets not reloaded or pool instance not preserved")
 	}
-	write(t, path, twoPools+"routes:\n  r: {pools: [a, nope]}\n")
+	write(t, path, twoPools+ep("openai", "r", "{targets: [{pool: a}, {pool: nope}]}"))
 	if err := l.Reload(); err == nil || l.State() != second {
-		t.Fatal("invalid route must be rejected and previous state kept")
+		t.Fatal("invalid endpoint must be rejected and previous state kept")
 	}
 }
 
@@ -243,20 +280,11 @@ const protoPools = `pools:
   oa: {upstream_url: 'http://y', max_concurrency: 1}
 `
 
-func TestEndpointsValidation(t *testing.T) {
+func TestEndpointsProtocolValidation(t *testing.T) {
 	bad := map[string]string{
-		"mixed":          "routes:\n  r: {pools: [oa], endpoints: {openai: {pools: [oa]}}}\n",
-		"mixed prio":     "routes:\n  r: {priority: 3, endpoints: {openai: {pools: [oa]}}}\n",
-		"empty map":      "routes:\n  r: {endpoints: {}}\n",
-		"unknown proto":  "routes:\n  r: {endpoints: {gemini: {pools: [oa]}}}\n",
-		"empty pools":    "routes:\n  r: {endpoints: {openai: {pools: []}}}\n",
-		"no pools":       "routes:\n  r: {endpoints: {openai: {priority: 1}}}\n",
-		"unknown pool":   "routes:\n  r: {endpoints: {openai: {pools: [zzz]}}}\n",
-		"duplicate":      "routes:\n  r: {endpoints: {anthropic: {pools: [ca, cb, ca]}}}\n",
-		"proto mismatch": "routes:\n  r: {endpoints: {anthropic: {pools: [oa]}}}\n",
-		"mismatch 2":     "routes:\n  r: {endpoints: {openai: {pools: [oa, ca]}}}\n",
-		"shorthand anth": "routes:\n  r: {pools: [ca]}\n",
-		"unknown key":    "routes:\n  r: {endpoints: {openai: {pools: [oa], poolz: [x]}}}\n",
+		"unknown proto":  ep("gemini", "r", "{targets: [{pool: oa}]}"),
+		"proto mismatch": ep("anthropic", "r", "{targets: [{pool: oa}]}"),
+		"mismatch 2":     ep("openai", "r", "{targets: [{pool: oa}, {pool: ca}]}"),
 		"bad pool proto": "pools:\n  p: {upstream_url: 'http://x', protocol: gemini, max_concurrency: 1}\n",
 	}
 	for name, r := range bad {
@@ -268,28 +296,61 @@ func TestEndpointsValidation(t *testing.T) {
 			t.Errorf("%s: expected error", name)
 		}
 	}
-	c, err := Parse([]byte(protoPools + `routes:
-  fast:
-    endpoints:
-      anthropic: {pools: [cb, ca], target_model: "haiku@low", priority: 10}
-      openai: {pool: oa, target_model: "luna@low", priority: 5}
-  short: {pool: oa, target_model: m, priority: 7}
+	c, err := Parse([]byte(protoPools + `endpoints:
+  anthropic:
+    fast: {mode: round-robin, priority: 10, targets: [{pool: cb, target_model: "haiku@low"}, {pool: ca, target_model: "haiku@low"}]}
+    aonly: {targets: [{pool: ca}]}
+  openai:
+    fast: {priority: 5, targets: [{pool: oa, target_model: "luna@low"}]}
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, _ := c.Routes["fast"].Endpoint("anthropic")
-	if len(a.Pools) != 2 || a.Pools[0] != "cb" || a.TargetModel != "haiku@low" || a.Priority != 10 {
+	a, _ := c.Endpoint("anthropic", "fast")
+	if a.Mode != ModeRoundRobin || len(a.Targets) != 2 || a.Targets[0].Pool != "cb" || a.Priority != 10 {
 		t.Fatalf("anthropic endpoint: %+v", a)
 	}
-	if o, _ := c.Routes["fast"].Endpoint("openai"); len(o.Pools) != 1 || o.Priority != 5 {
+	if o, _ := c.Endpoint("openai", "fast"); len(o.Targets) != 1 || o.Priority != 5 {
 		t.Fatalf("openai endpoint: %+v", o)
-	}
-	if got := c.Routes["short"].EndpointProtocols(); len(got) != 1 || got[0] != "openai" {
-		t.Fatalf("shorthand protocols: %v", got)
 	}
 	if c.Pools["oa"].Protocol != "openai" {
 		t.Fatal("default protocol not openai")
+	}
+	if w := c.Warnings(); len(w) != 1 || !strings.Contains(w[0], `"aonly" exists under anthropic but not openai`) {
+		t.Fatalf("warnings %v", w)
+	}
+}
+
+func TestNoWarningsForSingleProtocol(t *testing.T) {
+	c, err := Parse([]byte(protoPools + ep("anthropic", "fast", "{targets: [{pool: ca}]}")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := c.Warnings(); len(w) != 0 {
+		t.Fatalf("unexpected warnings %v", w)
+	}
+}
+
+// TestTargetUserConfig is the documented subscription-only setup, as the Helm
+// chart renders it.
+func TestTargetUserConfig(t *testing.T) {
+	c, err := Parse([]byte(`server: {listen: ":8080", queue_timeout: "120s", aging_interval: "5s"}
+pools:
+  claude-subscription: {upstream_url: "http://localhost:9100", max_concurrency: 4, protocol: anthropic}
+endpoints:
+  anthropic:
+    fast: {targets: [{pool: claude-subscription, target_model: "claude-haiku-5-5@low"}]}
+    standard-low: {targets: [{pool: claude-subscription, target_model: "claude-sonnet-5-5@low"}]}
+    standard-medium: {targets: [{pool: claude-subscription, target_model: "claude-sonnet-5-5@medium"}]}
+    standard-high: {targets: [{pool: claude-subscription, target_model: "claude-sonnet-5-5@high"}]}
+    premium-high: {targets: [{pool: claude-subscription, target_model: "claude-opus-5-5@high"}]}
+    frontier-high: {targets: [{pool: claude-subscription, target_model: "claude-fable-5-2@high"}]}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(c.EndpointNames("anthropic")); n != 6 || len(c.Warnings()) != 0 {
+		t.Fatalf("endpoints %d warnings %v", n, c.Warnings())
 	}
 }
 

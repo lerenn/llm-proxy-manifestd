@@ -8,7 +8,7 @@ pod
 └─ claude-subscription         127.0.0.1:9100  (adapter + official `claude` CLI, login on a PVC)
 ```
 
-The Claude adapter speaks the **Anthropic Messages API** (`POST /v1/messages`, streaming SSE and non-stream, plus `GET /ready`), so Claude Code style clients can be served. Claude clients call `/v1/messages` on the proxy, which uses a route's `anthropic` endpoint (see [Protocol endpoints](./protocol-endpoints)): **a route needs `endpoints.anthropic` to be reachable by Claude clients**, otherwise it answers 404 `endpoint_not_configured`. The adapter listens on loopback only, so it needs no `api_key` and no NetworkPolicy.
+The Claude adapter speaks the **Anthropic Messages API** (`POST /v1/messages`, streaming SSE and non-stream, plus `GET /ready`), so Claude Code style clients can be served. Claude clients call `/v1/messages` on the proxy, which uses an endpoint under `endpoints.anthropic` (see [Protocol endpoints](./protocol-endpoints)): **a name must be declared under `endpoints.anthropic` to be reachable by Claude clients**, otherwise it answers 404 `endpoint_not_configured`. The adapter listens on loopback only, so it needs no `api_key` and no NetworkPolicy.
 
 ::: warning Status
 The Claude adapter has only been tested against a fake CLI that emits the documented `stream-json` events. It has **never run against a real subscription login**. Details in [Unverified](#unverified).
@@ -59,20 +59,24 @@ A pod with only API-key providers keeps the normal rolling update and `replicaCo
 
 ### Subscription with an API fallback
 
-List both pools in one route's Anthropic endpoint; the proxy prefers the pool with fewer in-flight requests and fails over on 5xx or transport errors (see [Multi-pool routing](./multi-pool-routing)):
+List both pools as targets of one Anthropic endpoint. With `mode: failover` the subscription is always used first (requests queue on it when it is busy) and the API pool only takes a request when the subscription fails with a 5xx or transport error (see [Multi-pool routing](./multi-pool-routing)):
 
 ```yaml
 providers:
   claude-subscription: {type: claude, maxConcurrency: 4}
   my-anthropic: {type: anthropic-api, apiKey: {existingSecret: {name: provider-keys, key: anthropic}}}
 config:
-  routes:
-    standard-medium:
-      endpoints:
-        anthropic: {pools: [claude-subscription, my-anthropic], target_model: "claude-sonnet-5-5@medium", priority: 50}
+  endpoints:
+    anthropic:
+      standard-medium:
+        mode: failover
+        priority: 50
+        targets:
+          - {pool: claude-subscription, target_model: "claude-sonnet-5-5@medium"}
+          - {pool: my-anthropic, target_model: "claude-sonnet-5-5"}
 ```
 
-Note that load is spread across both pools, not "subscription first": the API pool is used whenever it has fewer requests in flight.
+Use the default `mode: least-inflight` instead to spread load over both pools (the API pool is then used whenever it has fewer requests in flight).
 
 ## Helm configuration (claude sidecar)
 
@@ -92,13 +96,14 @@ adapters:
     image: {repository: ghcr.io/lerenn/llm-proxy-manifestd-adapter-claude, tag: ""}  # tag defaults to appVersion
 
 config:
-  routes:
-    fast:            {endpoints: {anthropic: {pools: [claude-subscription], target_model: "claude-haiku-5-5@low",     priority: 10}}}
-    standard-low:    {endpoints: {anthropic: {pools: [claude-subscription], target_model: "claude-sonnet-5-5@low",    priority: 50}}}
-    standard-medium: {endpoints: {anthropic: {pools: [claude-subscription], target_model: "claude-sonnet-5-5@medium", priority: 50}}}
-    standard-high:   {endpoints: {anthropic: {pools: [claude-subscription], target_model: "claude-sonnet-5-5@high",   priority: 50}}}
-    premium-high:    {endpoints: {anthropic: {pools: [claude-subscription], target_model: "claude-opus-5-5@high",     priority: 80}}}
-    frontier-high:   {endpoints: {anthropic: {pools: [claude-subscription], target_model: "claude-fable-5-2@high",    priority: 90}}}
+  endpoints:
+    anthropic:
+      fast:            {priority: 10, targets: [{pool: claude-subscription, target_model: "claude-haiku-5-5@low"}]}
+      standard-low:    {priority: 50, targets: [{pool: claude-subscription, target_model: "claude-sonnet-5-5@low"}]}
+      standard-medium: {priority: 50, targets: [{pool: claude-subscription, target_model: "claude-sonnet-5-5@medium"}]}
+      standard-high:   {priority: 50, targets: [{pool: claude-subscription, target_model: "claude-sonnet-5-5@high"}]}
+      premium-high:    {priority: 80, targets: [{pool: claude-subscription, target_model: "claude-opus-5-5@high"}]}
+      frontier-high:   {priority: 90, targets: [{pool: claude-subscription, target_model: "claude-fable-5-2@high"}]}
 ```
 
 For every entry in `providers` the chart renders:
@@ -107,9 +112,9 @@ For every entry in `providers` the chart renders:
 - one PVC `<release>-<provider>` mounted at `/data/claude` (`CLAUDE_CONFIG_DIR`), holding the login;
 - a pool with the provider's name (`upstream_url: http://localhost:<port>`, `max_concurrency`, and `protocol: anthropic` for claude providers when ``) merged into `config.pools`. A clash with a user-defined pool of the same name fails the render.
 
-The chart's example pool and routes (`defaultPools`/`defaultRoutes`) are only applied when `providers` is empty, so they never interfere with provider setups.
+The chart's example pool and endpoints (`defaultPools`/`defaultEndpoints`) are only applied when `providers` is empty, so they never interfere with provider setups.
 
-Spread a route over several providers with `pools: [claude-a, claude-b]` (see [Multi-pool routing](./multi-pool-routing)).
+Spread an endpoint over several providers by listing several `targets` (see [Multi-pool routing](./multi-pool-routing)). `priority` and `max_concurrency`/`maxConcurrency` may be omitted (priority `0`, concurrency `4` for providers).
 
 When at least one provider exists the Deployment uses `replicas: 1` and `strategy: Recreate`, `automountServiceAccountToken: false`, non-root users (65532 for the proxy, 10001 for adapters), `readOnlyRootFilesystem`, all capabilities dropped, a `check-config` init container that runs `/checker -f` on the rendered config (from the proxy image), and a per-container readiness probe. With `providers: {}` the chart renders exactly as before.
 
@@ -133,7 +138,7 @@ Each request runs a fresh `claude` process (`-p`, `--input-format/--output-forma
 ## Operations
 
 - **Rollout means a brief outage.** `Recreate` stops the old pod before starting the new one (a login volume is ReadWriteOnce and a provider must not run twice).
-- **Adding or removing a provider restarts the pod** (it changes the pod spec). Edits to `config` alone (routes, priorities) hot-reload without a restart.
+- **Adding or removing a provider restarts the pod** (it changes the pod spec). Edits to `config` alone (endpoints, priorities) hot-reload without a restart.
 - Uninstalling the release deletes the PVCs and therefore the logins.
 
 ## Security notes

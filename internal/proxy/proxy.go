@@ -1,4 +1,4 @@
-// Package proxy implements the HTTP handler: model routing, priority queuing
+// Package proxy implements the HTTP handler: endpoint resolution, priority queuing
 // and zero-buffer streaming reverse proxying.
 package proxy
 
@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/lerenn/llm-proxy-manifestd/internal/config"
@@ -36,7 +37,8 @@ type Handler struct {
 	version      string
 	started      time.Time
 	reloadStatus func() config.ReloadStatus
-	routes       sync.Map // route name -> *routeCounters
+	endpoints    sync.Map // counterKey -> *routeCounters
+	rr           sync.Map // counterKey -> *atomic.Uint64 (round-robin cursor)
 	dashboard    http.Handler
 }
 
@@ -158,24 +160,28 @@ func (h *Handler) status(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"pools": out})
 }
 
-// models lists the routes that have an endpoint for the caller's protocol.
-// A request carrying an anthropic-version header (or an x-api-key without
-// Authorization) gets the Anthropic list shape, anything else the OpenAI one.
-func (h *Handler) models(w http.ResponseWriter, r *http.Request) {
-	proto := config.ProtocolOpenAI
-	if r.Header.Get("anthropic-version") != "" || (r.Header.Get("X-Api-Key") != "" && r.Header.Get("Authorization") == "") {
-		proto = config.ProtocolAnthropic
+// modelsProtocol returns the API a GET /v1/models caller speaks: Anthropic
+// when it sends an anthropic-version or x-api-key header (Anthropic SDKs
+// always send one of them), OpenAI otherwise.
+func modelsProtocol(r *http.Request) string {
+	if r.Header.Get("Anthropic-Version") != "" || r.Header.Get("X-Api-Key") != "" {
+		return config.ProtocolAnthropic
 	}
+	return config.ProtocolOpenAI
+}
+
+// models lists the endpoint names configured for the caller's protocol, in
+// that protocol's list shape.
+func (h *Handler) models(w http.ResponseWriter, r *http.Request) {
+	proto := modelsProtocol(r)
 	st := h.state()
 	if st == nil {
 		writeProtoError(w, proto, http.StatusServiceUnavailable, "server_error", "not_ready", "configuration not loaded")
 		return
 	}
-	data := []map[string]any{}
-	for _, name := range st.Config.RouteNames() {
-		if _, ok := st.Config.Routes[name].Endpoint(proto); !ok {
-			continue
-		}
+	names := st.Config.EndpointNames(proto)
+	data := make([]map[string]any, 0, len(names))
+	for _, name := range names {
 		if proto == config.ProtocolAnthropic {
 			data = append(data, map[string]any{"type": "model", "id": name, "display_name": name, "created_at": "1970-01-01T00:00:00Z"})
 			continue
@@ -216,40 +222,31 @@ func (h *Handler) proxy(w http.ResponseWriter, r *http.Request) {
 		writeProtoError(w, proto, http.StatusBadRequest, "invalid_request_error", "missing_model", "the 'model' field is required and must be a string")
 		return
 	}
-	route, ok := st.Config.Routes[model]
-	if !ok {
-		writeProtoError(w, proto, http.StatusNotFound, "invalid_request_error", "model_not_found", "the model '"+model+"' does not exist")
-		return
-	}
-	ep, ok := route.Endpoint(proto)
+	ep, ok := st.Config.Endpoint(proto, model)
 	if !ok {
 		writeProtoError(w, proto, http.StatusNotFound, "invalid_request_error", "endpoint_not_configured",
-			"the model '"+model+"' has no "+proto+" endpoint")
+			"no "+proto+" endpoint named '"+model+"' is configured")
 		return
 	}
-	if ep.TargetModel != "" && ep.TargetModel != model {
-		tm, _ := json.Marshal(ep.TargetModel)
-		obj["model"] = tm
-		if body, err = json.Marshal(obj); err != nil {
-			writeProtoError(w, proto, http.StatusInternalServerError, "server_error", "rewrite_failed", err.Error())
-			return
-		}
-	}
 
-	priority := ep.Priority
+	var prioOverride *int
 	if v := r.Header.Get("X-Priority"); v != "" {
 		p, err := strconv.Atoi(strings.TrimSpace(v))
 		if err != nil {
 			writeProtoError(w, proto, http.StatusBadRequest, "invalid_request_error", "invalid_priority", "X-Priority must be an integer")
 			return
 		}
-		priority = p
+		prioOverride = &p
 	}
 
-	rc := h.counters(model)
+	key := counterKey(proto, model)
+	rc := h.counters(key)
 	rc.requests.Add(1)
 
-	rt := &failoverTransport{h: h, st: st, ep: ep, proto: proto, priority: priority, body: body, rc: rc}
+	rt := &failoverTransport{
+		h: h, st: st, ep: ep, proto: proto, model: model, prioOverride: prioOverride,
+		obj: obj, body: body, rc: rc, rr: h.rrCounter(key),
+	}
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.Header.Del("X-Priority")
@@ -290,47 +287,98 @@ type acquireError struct{ err error }
 
 func (e *acquireError) Error() string { return e.err.Error() }
 
-// failoverTransport sends a request to the route's pools, trying further
-// pools when an attempt fails before any response was produced. See
-// README "Multi-pool routing" for the exact semantics.
+// failoverTransport sends a request to the endpoint's targets, trying further
+// targets when an attempt fails before any response was produced. See the
+// "Multi-pool routing" guide for the exact semantics.
 type failoverTransport struct {
-	h        *Handler
-	st       *config.RuntimeState
-	ep       config.Endpoint
-	proto    string
-	priority int
-	body     []byte
-	rc       *routeCounters
+	h            *Handler
+	st           *config.RuntimeState
+	ep           config.Endpoint
+	proto        string
+	model        string // client-facing model (endpoint name)
+	prioOverride *int   // X-Priority, when sent
+	obj          map[string]json.RawMessage
+	body         []byte // original body
+	rc           *routeCounters
+	rr           *atomic.Uint64
 }
 
-// acquire picks a pool among remaining (indexes into route.Pools) and takes a
-// slot. Pools with a free slot are tried by ascending in-flight count (ties by
-// route order). If none has a free slot it queues on the pool with the lowest
-// active+queued load (ties by route order).
-func (t *failoverTransport) acquire(ctx context.Context, remaining []int) (idx int, release func(), wait time.Duration, err error) {
-	start := time.Now()
-	type cand struct{ idx, active, load int }
-	cands := make([]cand, 0, len(remaining))
-	for _, i := range remaining {
-		s := t.st.Pools[t.ep.Pools[i]].Stats()
-		cands = append(cands, cand{i, s.Active, s.Active + s.QueueDepth})
+func (t *failoverTransport) priority(i int) int {
+	if t.prioOverride != nil {
+		return *t.prioOverride
 	}
-	sort.SliceStable(cands, func(a, b int) bool { return cands[a].active < cands[b].active })
-	for _, c := range cands {
-		if rel, ok := t.st.Pools[t.ep.Pools[c.idx]].TryAcquire(); ok {
-			return c.idx, rel, time.Since(start), nil
+	return t.ep.QueuePriority(i)
+}
+
+// bodyFor returns the request body for target i, with the model rewritten to
+// the target's target_model when it differs.
+func (t *failoverTransport) bodyFor(i int) ([]byte, error) {
+	tm := t.ep.Targets[i].TargetModel
+	if tm == "" || tm == t.model {
+		return t.body, nil
+	}
+	raw, _ := json.Marshal(tm)
+	obj := make(map[string]json.RawMessage, len(t.obj))
+	for k, v := range t.obj {
+		obj[k] = v
+	}
+	obj["model"] = raw
+	return json.Marshal(obj)
+}
+
+// order returns the remaining targets (indexes into ep.Targets) in the order
+// the endpoint's mode tries them for a free slot, and whether only the first
+// may be used (failover mode).
+func (t *failoverTransport) order(remaining []int, rrStart int) (cands []int, firstOnly bool) {
+	cands = append([]int(nil), remaining...)
+	switch t.ep.Mode {
+	case config.ModeFailover:
+		return cands, true
+	case config.ModeRoundRobin:
+		n := len(t.ep.Targets)
+		sort.SliceStable(cands, func(a, b int) bool {
+			return (cands[a]-rrStart+n)%n < (cands[b]-rrStart+n)%n
+		})
+		return cands, false
+	}
+	// least-inflight: ascending in-flight count, ties by list order.
+	active := make(map[int]int, len(cands))
+	for _, i := range cands {
+		active[i] = t.st.Pools[t.ep.Targets[i].Pool].Stats().Active
+	}
+	sort.SliceStable(cands, func(a, b int) bool { return active[cands[a]] < active[cands[b]] })
+	return cands, false
+}
+
+// acquire picks a target among remaining and takes a slot on its pool. The
+// first candidate (in mode order) with a free slot wins. If none has one the
+// request queues: on the least loaded pool (active+queued, ties by list
+// order) in least-inflight mode, on the first candidate otherwise.
+func (t *failoverTransport) acquire(ctx context.Context, remaining []int, rrStart int) (idx int, release func(), wait time.Duration, err error) {
+	start := time.Now()
+	cands, firstOnly := t.order(remaining, rrStart)
+	if firstOnly {
+		cands = cands[:1]
+	}
+	for _, i := range cands {
+		if rel, ok := t.st.Pools[t.ep.Targets[i].Pool].TryAcquire(); ok {
+			return i, rel, time.Since(start), nil
 		}
 	}
 	best := cands[0]
-	for _, c := range cands {
-		if c.load < best.load || (c.load == best.load && c.idx < best.idx) {
-			best = c
+	if t.ep.Mode == config.ModeLeastInflight {
+		bestLoad := -1
+		for _, i := range remaining {
+			s := t.st.Pools[t.ep.Targets[i].Pool].Stats()
+			if l := s.Active + s.QueueDepth; bestLoad < 0 || l < bestLoad {
+				best, bestLoad = i, l
+			}
 		}
 	}
-	name := t.ep.Pools[best.idx]
+	name := t.ep.Targets[best].Pool
 	t.rc.queued.Add(1)
 	qctx, cancel := context.WithTimeout(ctx, t.st.Config.Server.QueueTimeout.Std())
-	rel, aerr := t.st.Pools[name].Acquire(qctx, t.priority)
+	rel, aerr := t.st.Pools[name].Acquire(qctx, t.priority(best))
 	cancel()
 	t.rc.queued.Add(-1)
 	if aerr != nil {
@@ -342,20 +390,24 @@ func (t *failoverTransport) acquire(ctx context.Context, remaining []int) (idx i
 		}
 		return 0, nil, 0, &acquireError{aerr}
 	}
-	return best.idx, rel, time.Since(start), nil
+	return best, rel, time.Since(start), nil
 }
 
 func (t *failoverTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	remaining := make([]int, len(t.ep.Pools))
+	remaining := make([]int, len(t.ep.Targets))
 	for i := range remaining {
 		remaining[i] = i
 	}
+	rrStart := 0
+	if t.ep.Mode == config.ModeRoundRobin {
+		rrStart = int((t.rr.Add(1) - 1) % uint64(len(t.ep.Targets)))
+	}
 	for {
-		idx, release, wait, err := t.acquire(req.Context(), remaining)
+		idx, release, wait, err := t.acquire(req.Context(), remaining, rrStart)
 		if err != nil {
 			return nil, err
 		}
-		name := t.ep.Pools[idx]
+		name := t.ep.Targets[idx].Pool
 		pc := t.st.Config.Pools[name]
 		for k, v := range remaining {
 			if v == idx {
@@ -383,9 +435,14 @@ func (t *failoverTransport) RoundTrip(req *http.Request) (*http.Response, error)
 			out.Header.Del("X-Api-Key")
 			out.Header.Set("Authorization", "Bearer "+pc.APIKey)
 		}
-		out.Body = io.NopCloser(bytes.NewReader(t.body))
-		out.ContentLength = int64(len(t.body))
-		out.Header.Set("Content-Length", strconv.Itoa(len(t.body)))
+		body, err := t.bodyFor(idx)
+		if err != nil {
+			release()
+			return nil, err
+		}
+		out.Body = io.NopCloser(bytes.NewReader(body))
+		out.ContentLength = int64(len(body))
+		out.Header.Set("Content-Length", strconv.Itoa(len(body)))
 		out.Header.Del("Transfer-Encoding")
 		out.TransferEncoding = nil
 

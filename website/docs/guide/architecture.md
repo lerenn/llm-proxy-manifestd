@@ -1,16 +1,18 @@
 # Architecture
 
 ```text
-client ──► /v1/* ──► route lookup ──► pool.Acquire(priority) ──► ReverseProxy ──► upstream
-                         │                    │ (queue_timeout)        │ (FlushInterval: -1)
-                    model rewrite        slot held until the stream ends
+client ──► /v1/* ──► endpoint lookup ─► pool.Acquire(priority) ──► ReverseProxy ──► upstream
+                         │                      │ (queue_timeout)        │ (FlushInterval: -1)
+               target + model rewrite      slot held until the stream ends
 ```
 
 ## Request flow
 
-1. The body is buffered and the JSON `model` is looked up in `routes`.
-2. `model` is rewritten to `target_model` (if set) and `Content-Length` is corrected.
-3. A slot is acquired from the route's pool, bounded by the client context and `server.queue_timeout`.
+1. The body is buffered and the JSON `model` is looked up in `endpoints.<protocol>`, the protocol
+   being `anthropic` for `/v1/messages` and `openai` for other paths.
+2. A target is chosen per the endpoint `mode`; `model` is rewritten to its `target_model` (if set)
+   and `Content-Length` is corrected.
+3. A slot is acquired from the target's pool, bounded by the client context and `server.queue_timeout`.
 4. The request is forwarded with `Authorization: Bearer <api_key>`; headers such as `X-Session-Id` and
    `OpenAI-Beta` are preserved. `X-Priority` is consumed by the proxy.
 5. The response is streamed with flushing after every write. The slot is released **only after the body

@@ -5,19 +5,18 @@ const values = `providers:
     type: claude
     maxConcurrency: 4
 config:
-  routes:
-    standard-medium:
-      endpoints:
-        anthropic:
-          pools: [claude-subscription]
-          target_model: "claude-sonnet-5-5@medium"
-          priority: 50
-    premium-high:
-      endpoints:
-        anthropic:
-          pools: [claude-subscription]
-          target_model: "claude-opus-5-5@high"
-          priority: 80
+  endpoints:
+    anthropic:
+      standard-medium:
+        priority: 50
+        targets:
+          - pool: claude-subscription
+            target_model: "claude-sonnet-5-5@medium"
+      premium-high:
+        priority: 80
+        targets:
+          - pool: claude-subscription
+            target_model: "claude-opus-5-5@high"
 dashboard:
   ingress:
     enabled: true
@@ -42,7 +41,7 @@ dashboard:
             <div class="hpo-box hpo-proxy">
               <b>llm-proxy-manifestd</b>
               <small>:8080 &middot; dashboard &middot; queues</small>
-              <div class="hpo-cm">ConfigMap (routes) mounted</div>
+              <div class="hpo-cm">ConfigMap (endpoints) mounted</div>
             </div>
             <div class="hpo-arrow">&darr; <small>localhost</small></div>
             <div class="hpo-sidecars">

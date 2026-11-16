@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,20 +13,26 @@ import (
 	"time"
 
 	"github.com/lerenn/llm-proxy-manifestd/internal/config"
+	"github.com/lerenn/llm-proxy-manifestd/internal/pool"
 )
 
 // mpState builds a state with pools named after the given upstream URLs
 // (a, b, c...) each with the given max concurrency, and route "m".
 func mpState(t *testing.T, max int, qt string, urls ...string) *config.RuntimeState {
 	t.Helper()
-	var pools, names []string
+	return mpStateMode(t, "", max, qt, urls...)
+}
+
+func mpStateMode(t *testing.T, mode string, max int, qt string, urls ...string) *config.RuntimeState {
+	t.Helper()
+	var pools, targets []string
 	for i, u := range urls {
 		n := string(rune('a' + i))
-		names = append(names, n)
+		targets = append(targets, "{pool: "+n+", target_model: 'real@medium'}")
 		pools = append(pools, "  "+n+": {upstream_url: '"+u+"', api_key: 'k-"+n+"', max_concurrency: "+string(rune('0'+max))+"}")
 	}
 	y := "server: {queue_timeout: '" + qt + "'}\npools:\n" + strings.Join(pools, "\n") +
-		"\nroutes:\n  m: {pools: [" + strings.Join(names, ", ") + "], target_model: 'real@medium'}\n"
+		"\nendpoints:\n  openai:\n    m: {mode: '" + mode + "', targets: [" + strings.Join(targets, ", ") + "]}\n"
 	p := filepath.Join(t.TempDir(), "c.yaml")
 	if err := os.WriteFile(p, []byte(y), 0o644); err != nil {
 		t.Fatal(err)
@@ -203,10 +210,10 @@ func TestMultiPoolQueueTimeoutAndHotReload(t *testing.T) {
 	a := named("a", &ha, 200, hold)
 	defer a.Close()
 	path := filepath.Join(t.TempDir(), "c.yaml")
-	y := func(routes string) string {
-		return "server: {queue_timeout: '300ms'}\npools:\n  a: {upstream_url: '" + a.URL + "', max_concurrency: 1}\n  b: {upstream_url: '" + a.URL + "', max_concurrency: 1}\nroutes:\n" + routes
+	y := func(targets string) string {
+		return "server: {queue_timeout: '300ms'}\npools:\n  a: {upstream_url: '" + a.URL + "', max_concurrency: 1}\n  b: {upstream_url: '" + a.URL + "', max_concurrency: 1}\nendpoints:\n  openai:\n    m: {targets: " + targets + "}\n"
 	}
-	_ = os.WriteFile(path, []byte(y("  m: {pool: a}\n")), 0o644)
+	_ = os.WriteFile(path, []byte(y("[{pool: a}]")), 0o644)
 	l := config.NewLoader(path, quiet())
 	if err := l.Reload(); err != nil {
 		t.Fatal(err)
@@ -224,8 +231,8 @@ func TestMultiPoolQueueTimeoutAndHotReload(t *testing.T) {
 		t.Fatalf("expected queue timeout on a, got %d %q", r.StatusCode, r.Header.Get("X-Pool-Name"))
 	}
 
-	// Hot-reload: route now spans both pools; same request is served by b.
-	_ = os.WriteFile(path, []byte(y("  m: {pools: [a, b]}\n")), 0o644)
+	// Hot-reload: endpoint now spans both pools; same request is served by b.
+	_ = os.WriteFile(path, []byte(y("[{pool: a}, {pool: b}]")), 0o644)
 	if err := l.Reload(); err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +249,8 @@ func TestDashboardShowsPoolsNoSecrets(t *testing.T) {
 	h := New(func() *config.RuntimeState { return st }, quiet())
 	rec := get(t, h, "proxy.test", "/dashboard/api/state")
 	body := rec.Body.String()
-	for _, want := range []string{`"pools":["a","b"]`, `"upstreams":["h1.example.com","h2.example.com:9000"]`} {
+	for _, want := range []string{`"protocol":"openai","name":"m","mode":"least-inflight"`,
+		`{"pool":"a","upstream":"h1.example.com","target_model":"real@medium","priority":0}`, `{"pool":"b","upstream":"h2.example.com:9000"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %s in %s", want, body)
 		}
@@ -252,4 +260,127 @@ func TestDashboardShowsPoolsNoSecrets(t *testing.T) {
 			t.Errorf("leaks %q", bad)
 		}
 	}
+}
+
+// waitFor polls cond for up to 2s.
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	for i := 0; i < 400 && !cond(); i++ {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !cond() {
+		t.Fatal("condition not reached")
+	}
+}
+
+func TestRoundRobinRotates(t *testing.T) {
+	var ha, hb, hc atomic.Int32
+	a, b, c := named("a", &ha, 200, nil), named("b", &hb, 200, nil), named("c", &hc, 200, nil)
+	defer a.Close()
+	defer b.Close()
+	defer c.Close()
+	srv := serve(t, mpStateMode(t, "round-robin", 2, "5s", a.URL, b.URL, c.URL))
+	var got []string
+	for i := 0; i < 6; i++ {
+		r := post(t, srv.URL+"/v1/x", `{"model":"m"}`, nil)
+		r.Body.Close()
+		got = append(got, r.Header.Get("X-Pool-Name"))
+	}
+	if strings.Join(got, "") != "abcabc" {
+		t.Fatalf("rotation %v", got)
+	}
+}
+
+func TestRoundRobinSkipsFullPool(t *testing.T) {
+	var ha, hb atomic.Int32
+	hold := make(chan struct{})
+	a, b := named("a", &ha, 200, hold), named("b", &hb, 200, nil)
+	defer a.Close()
+	defer b.Close()
+	st := mpStateMode(t, "round-robin", 1, "5s", a.URL, b.URL)
+	srv := serve(t, st)
+	done := make(chan struct{})
+	go func() { r := post(t, srv.URL+"/v1/x", `{"model":"m"}`, nil); r.Body.Close(); close(done) }()
+	waitFor(t, func() bool { return st.Pools["a"].Stats().Active == 1 })
+	// Cursor now points at b, then at a (full) -> b again.
+	for i := 0; i < 2; i++ {
+		r := post(t, srv.URL+"/v1/x", `{"model":"m"}`, nil)
+		r.Body.Close()
+		if r.Header.Get("X-Pool-Name") != "b" {
+			t.Fatalf("request %d: pool %q", i, r.Header.Get("X-Pool-Name"))
+		}
+	}
+	close(hold)
+	<-done
+}
+
+func TestFailoverModeQueuesOnPrimary(t *testing.T) {
+	var ha, hb atomic.Int32
+	hold := make(chan struct{})
+	a, b := named("a", &ha, 200, hold), named("b", &hb, 200, nil)
+	defer a.Close()
+	defer b.Close()
+	st := mpStateMode(t, "failover", 1, "5s", a.URL, b.URL)
+	srv := serve(t, st)
+	res := make(chan string, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			r := post(t, srv.URL+"/v1/x", `{"model":"m"}`, nil)
+			r.Body.Close()
+			res <- r.Header.Get("X-Pool-Name")
+		}()
+	}
+	// The secondary is idle, yet the second request queues on the primary.
+	waitFor(t, func() bool { return st.Pools["a"].Stats().Active == 1 && st.Pools["a"].Stats().QueueDepth == 1 })
+	if hb.Load() != 0 {
+		t.Fatal("failover mode must not use b while a is healthy")
+	}
+	close(hold)
+	if p1, p2 := <-res, <-res; p1 != "a" || p2 != "a" {
+		t.Fatalf("pools %q %q", p1, p2)
+	}
+
+	// The primary failing moves the request to b.
+	var hf atomic.Int32
+	f := named("f", &hf, 503, nil)
+	defer f.Close()
+	srv2 := serve(t, mpStateMode(t, "failover", 1, "5s", f.URL, b.URL))
+	r := post(t, srv2.URL+"/v1/x", `{"model":"m"}`, nil)
+	r.Body.Close()
+	if r.StatusCode != 200 || r.Header.Get("X-Pool-Name") != "b" || hf.Load() != 1 {
+		t.Fatalf("%d %q", r.StatusCode, r.Header.Get("X-Pool-Name"))
+	}
+}
+
+func TestPerTargetModelAndPriority(t *testing.T) {
+	var ha, hb atomic.Int32
+	a, b := named("a", &ha, 503, nil), named("b", &hb, 200, nil)
+	defer a.Close()
+	defer b.Close()
+	y := "pools:\n  a: {upstream_url: '" + a.URL + "', max_concurrency: 1}\n  b: {upstream_url: '" + b.URL + "', max_concurrency: 1}\n" +
+		"endpoints:\n  openai:\n    m: {mode: failover, targets: [{pool: a, target_model: big}, {pool: b, target_model: small, priority: 42}]}\n"
+	cfg, err := config.Parse([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &config.RuntimeState{Config: cfg, Pools: map[string]*pool.Pool{"a": pool.New(1, 0), "b": pool.New(1, 0)}}
+	srv := serve(t, st)
+	r := post(t, srv.URL+"/v1/x", `{"model":"m","keep":1}`, nil)
+	body, _ := io.ReadAll(r.Body)
+	r.Body.Close()
+	if r.Header.Get("X-Pool-Name") != "b" || !strings.Contains(string(body), `"model":"small"`) || !strings.Contains(string(body), `"keep":1`) {
+		t.Fatalf("%q %s", r.Header.Get("X-Pool-Name"), body)
+	}
+
+	// Queue priority comes from the target: hold b, then queue on it.
+	e, _ := cfg.Endpoint("openai", "m")
+	if e.QueuePriority(0) != 0 || e.QueuePriority(1) != 42 {
+		t.Fatalf("priorities %d %d", e.QueuePriority(0), e.QueuePriority(1))
+	}
+	rel, _ := st.Pools["b"].Acquire(context.Background(), 0)
+	done := make(chan struct{})
+	go func() { r := post(t, srv.URL+"/v1/x", `{"model":"m"}`, nil); r.Body.Close(); close(done) }()
+	waitFor(t, func() bool { _, ok := st.Pools["b"].QueueByPriority()[42]; return ok })
+	rel()
+	<-done
 }

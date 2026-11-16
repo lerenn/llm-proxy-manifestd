@@ -7,8 +7,9 @@ Each pool has `max_concurrency` slots. When all are busy, requests wait in a pri
 1. Higher **effective priority** first.
 2. Ties are served in strict FIFO order (earliest arrival first).
 
-A route's `priority` is the base priority. A request can override it with the `X-Priority: <int>`
-header.
+An endpoint's `priority` (default `0`) is the base priority; a target's own `priority`, when set,
+replaces it for requests queued on that target. A request can override both with the
+`X-Priority: <int>` header.
 
 ## Aging
 
@@ -36,10 +37,11 @@ active count never drops, so a new arrival cannot barge in between.
 ## Example
 
 ```yaml
-routes:
-  codex-interactive: {pool: codex-sub, target_model: gpt-5.4, priority: 100}
-  codex-default:     {pool: codex-sub, target_model: gpt-5.4, priority: 50}
-  codex-background:  {pool: codex-sub, target_model: gpt-5.4, priority: 10}
+endpoints:
+  openai:
+    codex-interactive: {priority: 100, targets: [{pool: codex-sub, target_model: gpt-5.4}]}
+    codex-default:     {priority: 50,  targets: [{pool: codex-sub, target_model: gpt-5.4}]}
+    codex-background:  {priority: 10,  targets: [{pool: codex-sub, target_model: gpt-5.4}]}
 ```
 
 With `max_concurrency: 2`, two background agents can use the account; an interactive session arriving

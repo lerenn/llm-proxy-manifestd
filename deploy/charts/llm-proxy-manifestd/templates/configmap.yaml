@@ -7,11 +7,17 @@ metadata:
 data:
   config.yaml: |
     {{- $providers := include "llm-proxy-manifestd.providers" . | fromJsonArray }}
+    {{- if hasKey .Values "defaultRoutes" }}
+    {{- fail "`defaultRoutes` was replaced by `defaultEndpoints` (endpoints.<anthropic|openai>.<name>: {targets: [{pool, target_model}]}): please migrate your values" }}
+    {{- end }}
+    {{- if hasKey .Values.config "routes" }}
+    {{- fail "`config.routes` was replaced by `config.endpoints` (endpoints.<anthropic|openai>.<name>: {mode, priority, targets: [{pool, target_model}]}); see the Protocol endpoints guide" }}
+    {{- end }}
     {{- $cfg := deepCopy .Values.config }}
     {{- $pools := deepCopy (get $cfg "pools" | default dict) }}
     {{- if not $providers }}
     {{- $pools = merge $pools (deepCopy .Values.defaultPools) }}
-    {{- $_ := set $cfg "routes" (merge (deepCopy (get $cfg "routes" | default dict)) (deepCopy .Values.defaultRoutes)) }}
+    {{- $_ := set $cfg "endpoints" (merge (deepCopy (get $cfg "endpoints" | default dict)) (deepCopy (.Values.defaultEndpoints | default dict))) }}
     {{- end }}
     {{- range $providers }}
     {{- if hasKey $pools .name }}
