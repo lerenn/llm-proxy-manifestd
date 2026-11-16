@@ -22,6 +22,7 @@ export default defineConfig({
         items: [
           { text: 'Getting Started', link: '/guide/getting-started' },
           { text: 'Helm Values', link: '/guide/helm-values' },
+          { text: 'Dashboard', link: '/guide/dashboard' },
           { text: 'Architecture', link: '/guide/architecture' },
           { text: 'Priority Queues', link: '/guide/priority-queues' },
           { text: 'Releasing', link: '/guide/releasing' },

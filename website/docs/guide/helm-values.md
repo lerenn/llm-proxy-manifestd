@@ -14,6 +14,9 @@ Chart: `oci://ghcr.io/lerenn/charts/llm-proxy-manifestd`.
 | `service.type` / `service.port` | `ClusterIP` / `80` | Service settings. |
 | `ingress.enabled` | `false` | Create an Ingress. |
 | `ingress.className`, `.annotations`, `.hosts`, `.tls` | | Standard ingress settings. |
+| `dashboard.ingress.enabled` | `false` | Create a second Ingress for the [dashboard](./dashboard). |
+| `dashboard.ingress.host` | `""` | Dashboard hostname (should start with `dashboard.`, or match `config.dashboard.host`). |
+| `dashboard.ingress.className`, `.annotations`, `.tls` | falls back to `ingress.*` | Settings for the dashboard Ingress. |
 | `config` | example manifest | Rendered with `toYaml` into `config.yaml`. |
 
 ::: warning Replicas
@@ -38,6 +41,10 @@ pools:
     upstream_url: http://cliproxyapi.default.svc.cluster.local:8317
     api_key: "${LOCAL_BRIDGE_KEY}"   # sent as "Authorization: Bearer ..."
     max_concurrency: 2               # >= 1
+dashboard:
+  enabled: true            # default true
+  host: ""                  # exact dashboard hostname; default: any host starting with "dashboard."
+  path: /dashboard         # prefix on every host; "off" disables
 routes:
   <name>:                  # the model name clients send
     pool: <pool name>

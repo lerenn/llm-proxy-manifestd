@@ -1,6 +1,6 @@
 # llm-proxy-manifestd
 
-Headless, IaC-first Go LLM reverse proxy for Kubernetes with priority queuing, per-pool concurrency limits, SSE streaming, and ConfigMap hot-reloading—zero UI, zero database.
+Headless, IaC-first Go LLM reverse proxy for Kubernetes with priority queuing, per-pool concurrency limits, SSE streaming, and ConfigMap hot-reloading—a public read-only status dashboard embedded in the binary, zero database.
 
 Everything is declared in a single YAML manifest delivered through Helm. There is nothing to click, nothing to migrate, and no state to back up: change your values, run `helm upgrade`, and the running proxy reloads the new manifest without dropping a single in-flight stream.
 
@@ -41,6 +41,21 @@ helm upgrade llm-proxy oci://ghcr.io/lerenn/charts/llm-proxy-manifestd -f values
 ```
 
 Clients then talk OpenAI-compatible HTTP to the service and use a route name (e.g. `codex-interactive`) as the model.
+
+## Dashboard
+
+The binary embeds a lightweight, read-only dashboard (status, version, uptime, slots, queue depth per priority, per-route in-flight/queued/requests/errors, last config reload). It is public and shows only names, upstream host names, counts and timings, never keys, URLs, prompts or headers.
+
+It is served at `/` for hosts starting with `dashboard.` (and only the dashboard is served there, never `/v1/...`) and under `/dashboard/` on every host. Expose it on its own host with the chart:
+
+```yaml
+dashboard:
+  ingress:
+    enabled: true
+    host: dashboard.llm-proxy.example.com
+```
+
+See the [Dashboard guide](https://llm-proxy-manifestd.lerenn.dev/guide/dashboard) for the `dashboard:` manifest keys.
 
 ## Documentation
 

@@ -126,6 +126,17 @@ func (p *Pool) Stats() Stats {
 	}
 }
 
+// QueueByPriority returns the number of waiters per base (non-aged) priority.
+func (p *Pool) QueueByPriority() map[int]int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make(map[int]int)
+	for _, w := range p.queue.items {
+		out[w.priority]++
+	}
+	return out
+}
+
 func (p *Pool) releaser() func() {
 	var once sync.Once
 	return func() { once.Do(p.release) }

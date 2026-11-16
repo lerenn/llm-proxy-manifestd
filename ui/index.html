@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex">
+<title>llm-proxy-manifestd dashboard</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>llm-proxy-manifestd</h1>
+  <p id="status" class="badge" role="status" aria-live="polite">Loading…</p>
+</header>
+<div id="error" class="error" role="alert" hidden></div>
+<main>
+  <section aria-label="Overview" class="cards">
+    <div class="card"><h2>Version</h2><p id="version" class="big">–</p></div>
+    <div class="card"><h2>Uptime</h2><p id="uptime" class="big">–</p></div>
+    <div class="card"><h2>Slots used</h2><p id="slots" class="big">–</p><div class="meter" aria-hidden="true"><div id="slots-bar"></div></div></div>
+    <div class="card"><h2>Queued</h2><p id="queued" class="big">–</p></div>
+    <div class="card"><h2>In flight</h2><p id="inflight" class="big">–</p></div>
+    <div class="card"><h2>Requests / errors</h2><p id="totals" class="big">–</p></div>
+    <div class="card"><h2>Config</h2><p id="config" class="big">–</p><p id="reload" class="sub"></p></div>
+  </section>
+
+  <section aria-labelledby="pools-h">
+    <h2 id="pools-h">Pools</h2>
+    <div class="scroll"><table>
+      <thead><tr><th scope="col">Pool</th><th scope="col">Upstream</th><th scope="col" class="num">Slots</th><th scope="col" class="num">Queued</th><th scope="col">Queue by priority</th><th scope="col" class="num">Served</th></tr></thead>
+      <tbody id="pools"></tbody>
+    </table></div>
+  </section>
+
+  <section aria-labelledby="routes-h">
+    <h2 id="routes-h">Routes</h2>
+    <div class="scroll"><table>
+      <thead><tr><th scope="col">Route</th><th scope="col">Pool</th><th scope="col">Upstream</th><th scope="col" class="num">Priority</th><th scope="col" class="num">In flight</th><th scope="col" class="num">Queued</th><th scope="col" class="num">Requests</th><th scope="col" class="num">Errors</th></tr></thead>
+      <tbody id="routes"></tbody>
+    </table></div>
+  </section>
+</main>
+<footer><span id="updated">–</span> · read-only · counters reset on restart</footer>
+<script src="app.js"></script>
+</body>
+</html>
