@@ -71,7 +71,7 @@ func run() error {
 
 	srv := &http.Server{
 		Addr:              loader.State().Config.Server.Listen,
-		Handler:           proxy.New(loader.State, logger),
+		Handler:           proxy.New(loader.State, logger, proxy.WithVersion(version), proxy.WithReloadStatus(loader.ReloadStatus)),
 		ReadHeaderTimeout: 15 * time.Second,
 		// No Read/Write timeouts: streams can be long-lived.
 	}

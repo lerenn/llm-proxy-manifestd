@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,9 +44,10 @@ func (d Duration) Std() time.Duration { return time.Duration(d) }
 
 // Config is the parsed manifest.
 type Config struct {
-	Server ServerConfig          `yaml:"server"`
-	Pools  map[string]PoolConfig `yaml:"pools"`
-	Routes map[string]Route      `yaml:"routes"`
+	Server    ServerConfig          `yaml:"server"`
+	Dashboard DashboardConfig       `yaml:"dashboard"`
+	Pools     map[string]PoolConfig `yaml:"pools"`
+	Routes    map[string]Route      `yaml:"routes"`
 }
 
 // ServerConfig holds server-wide settings.
@@ -53,6 +55,30 @@ type ServerConfig struct {
 	Listen        string   `yaml:"listen"`
 	QueueTimeout  Duration `yaml:"queue_timeout"`
 	AgingInterval Duration `yaml:"aging_interval"`
+}
+
+// DashboardConfig configures the public read-only dashboard.
+type DashboardConfig struct {
+	// Enabled defaults to true when unset.
+	Enabled *bool `yaml:"enabled"`
+	// Host, when set, is the exact hostname (port ignored) serving the
+	// dashboard at "/". When empty, any host starting with "dashboard." does.
+	Host string `yaml:"host"`
+	// Path is the prefix serving the dashboard on every host. Defaults to
+	// "/dashboard"; "off" disables the path mount.
+	Path string `yaml:"path"`
+}
+
+// IsEnabled reports whether the dashboard is enabled.
+func (d DashboardConfig) IsEnabled() bool { return d.Enabled == nil || *d.Enabled }
+
+// PathPrefix returns the mount prefix without trailing slash, or "" if the
+// path mount is disabled.
+func (d DashboardConfig) PathPrefix() string {
+	if d.Path == "off" {
+		return ""
+	}
+	return d.Path
 }
 
 // PoolConfig describes one upstream account.
@@ -100,6 +126,22 @@ func (c *Config) validate() error {
 	if c.Server.AgingInterval < 0 {
 		return errors.New("server.aging_interval must not be negative")
 	}
+	d := &c.Dashboard
+	if d.Path == "" {
+		d.Path = "/dashboard"
+	}
+	if d.Path != "off" {
+		d.Path = strings.TrimRight(d.Path, "/")
+		if !strings.HasPrefix(d.Path, "/") {
+			return errors.New(`dashboard.path must start with "/" (or be "off")`)
+		}
+		for _, reserved := range []string{"/v1", "/healthz", "/status"} {
+			if d.Path == reserved || strings.HasPrefix(d.Path, reserved+"/") {
+				return fmt.Errorf("dashboard.path %q conflicts with %s", d.Path, reserved)
+			}
+		}
+	}
+	d.Host = strings.ToLower(strings.TrimSpace(d.Host))
 	if len(c.Pools) == 0 {
 		return errors.New("at least one pool is required")
 	}
@@ -138,6 +180,17 @@ func (c *Config) RouteNames() []string {
 type RuntimeState struct {
 	Config *Config
 	Pools  map[string]*pool.Pool
+	// Generation increments on every applied config; LoadedAt is when it was
+	// applied.
+	Generation int
+	LoadedAt   time.Time
+}
+
+// ReloadStatus describes the last reload attempt. It deliberately carries no
+// error text, which may echo config content.
+type ReloadStatus struct {
+	LastAttempt time.Time
+	Failed      bool
 }
 
 // Loader owns the active RuntimeState and reloads it from disk.
@@ -148,6 +201,7 @@ type Loader struct {
 
 	mu      sync.Mutex // serialises reloads
 	lastRaw []byte
+	status  atomic.Pointer[ReloadStatus]
 }
 
 // NewLoader creates a loader for the config file at path.
@@ -161,11 +215,20 @@ func NewLoader(path string, logger *slog.Logger) *Loader {
 // State returns the active state, or nil if no valid config was loaded yet.
 func (l *Loader) State() *RuntimeState { return l.state.Load() }
 
+// ReloadStatus returns the outcome of the last reload attempt (zero if none).
+func (l *Loader) ReloadStatus() ReloadStatus {
+	if s := l.status.Load(); s != nil {
+		return *s
+	}
+	return ReloadStatus{}
+}
+
 // Reload reads and applies the config file. On any error the previous state
 // is kept and the error returned.
-func (l *Loader) Reload() error {
+func (l *Loader) Reload() (err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	defer func() { l.status.Store(&ReloadStatus{LastAttempt: time.Now(), Failed: err != nil}) }()
 
 	raw, err := os.ReadFile(l.path)
 	if err != nil {
@@ -195,7 +258,10 @@ func (l *Loader) Reload() error {
 // Concurrency and aging changes are applied to the live pool.
 func buildState(cfg *Config, prev *RuntimeState) *RuntimeState {
 	aging := cfg.Server.AgingInterval.Std()
-	st := &RuntimeState{Config: cfg, Pools: make(map[string]*pool.Pool, len(cfg.Pools))}
+	st := &RuntimeState{Config: cfg, Pools: make(map[string]*pool.Pool, len(cfg.Pools)), Generation: 1, LoadedAt: time.Now()}
+	if prev != nil {
+		st.Generation = prev.Generation + 1
+	}
 	for name, pc := range cfg.Pools {
 		if prev != nil {
 			if old, ok := prev.Pools[name]; ok {

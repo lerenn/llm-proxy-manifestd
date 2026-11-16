@@ -320,3 +320,22 @@ func TestStressNoLeak(t *testing.T) {
 		t.Fatalf("leaked state: %+v", s)
 	}
 }
+
+func TestQueueByPriority(t *testing.T) {
+	p := New(1, 0)
+	rel, _ := p.Acquire(context.Background(), 0)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	for _, prio := range []int{10, 10, 1} {
+		go func(prio int) { _, _ = p.Acquire(ctx, prio) }(prio)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for p.Stats().QueueDepth < 3 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	got := p.QueueByPriority()
+	if got[10] != 2 || got[1] != 1 {
+		t.Errorf("got %v", got)
+	}
+	rel()
+}

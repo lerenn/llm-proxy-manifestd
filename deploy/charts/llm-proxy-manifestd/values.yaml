@@ -30,6 +30,19 @@ ingress:
           pathType: Prefix
   tls: []
 
+# Optional second Ingress exposing the public read-only dashboard on its own
+# host. The proxy serves the dashboard at "/" for hosts starting with
+# "dashboard." (or exactly `config.dashboard.host`), and only the dashboard:
+# /v1/... is not reachable through this host. className and annotations fall
+# back to the `ingress` values when empty.
+dashboard:
+  ingress:
+    enabled: false
+    host: ""            # e.g. dashboard.llm-proxy.example.com
+    className: ""
+    annotations: {}
+    tls: []
+
 # Rendered verbatim as config.yaml. Changing it hot-reloads the running pods.
 config:
   server:

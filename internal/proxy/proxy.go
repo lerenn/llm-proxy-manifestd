@@ -14,6 +14,7 @@ import (
 	"net/http/httputil"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lerenn/llm-proxy-manifestd/internal/config"
@@ -30,10 +31,27 @@ type Handler struct {
 	logger    *slog.Logger
 	transport http.RoundTripper
 	mux       *http.ServeMux
+
+	version      string
+	started      time.Time
+	reloadStatus func() config.ReloadStatus
+	routes       sync.Map // route name -> *routeCounters
+	dashboard    http.Handler
+}
+
+// Option customises a Handler.
+type Option func(*Handler)
+
+// WithVersion sets the build version shown on the dashboard.
+func WithVersion(v string) Option { return func(h *Handler) { h.version = v } }
+
+// WithReloadStatus supplies the last config reload outcome.
+func WithReloadStatus(f func() config.ReloadStatus) Option {
+	return func(h *Handler) { h.reloadStatus = f }
 }
 
 // New creates a Handler.
-func New(state StateFunc, logger *slog.Logger) *Handler {
+func New(state StateFunc, logger *slog.Logger, opts ...Option) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -51,8 +69,14 @@ func New(state StateFunc, logger *slog.Logger) *Handler {
 			ResponseHeaderTimeout: 0, // LLM upstreams may think for a long time
 			DisableCompression:    true,
 		},
-		mux: http.NewServeMux(),
+		mux:     http.NewServeMux(),
+		started: time.Now(),
+		version: "dev",
 	}
+	for _, o := range opts {
+		o(h)
+	}
+	h.dashboard = h.newDashboard()
 	h.mux.HandleFunc("GET /healthz", h.healthz)
 	h.mux.HandleFunc("GET /status", h.status)
 	h.mux.HandleFunc("GET /v1/models", h.models)
@@ -61,7 +85,12 @@ func New(state StateFunc, logger *slog.Logger) *Handler {
 }
 
 // ServeHTTP implements http.Handler.
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.mux.ServeHTTP(w, r) }
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h.serveDashboard(w, r) {
+		return
+	}
+	h.mux.ServeHTTP(w, r)
+}
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -167,15 +196,20 @@ func (h *Handler) proxy(w http.ResponseWriter, r *http.Request) {
 		priority = p
 	}
 
+	rc := h.counters(model)
+	rc.requests.Add(1)
+	rc.queued.Add(1)
 	start := time.Now()
 	qctx, cancel := context.WithTimeout(r.Context(), st.Config.Server.QueueTimeout.Std())
 	release, err := pl.Acquire(qctx, priority)
 	cancel()
+	rc.queued.Add(-1)
 	if err != nil {
 		if r.Context().Err() != nil {
 			return // client went away while queued
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
+			rc.errors.Add(1)
 			w.Header().Set("X-Pool-Name", route.Pool)
 			w.Header().Set("Retry-After", "5")
 			writeError(w, http.StatusServiceUnavailable, "server_error", "queue_timeout",
@@ -186,6 +220,8 @@ func (h *Handler) proxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The slot is held for the entire response stream, not just the headers.
+	rc.inflight.Add(1)
+	defer rc.inflight.Add(-1)
 	defer release()
 	wait := time.Since(start)
 
@@ -208,12 +244,16 @@ func (h *Handler) proxy(w http.ResponseWriter, r *http.Request) {
 		ModifyResponse: func(resp *http.Response) error {
 			resp.Header.Set("X-Queue-Wait-Ms", strconv.FormatInt(wait.Milliseconds(), 10))
 			resp.Header.Set("X-Pool-Name", route.Pool)
+			if resp.StatusCode >= 500 {
+				rc.errors.Add(1)
+			}
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			if r.Context().Err() != nil {
 				return
 			}
+			rc.errors.Add(1)
 			h.logger.Error("upstream error", "pool", route.Pool, "error", err)
 			writeError(w, http.StatusBadGateway, "server_error", "upstream_error", "upstream request failed")
 		},
