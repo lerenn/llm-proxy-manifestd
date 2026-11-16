@@ -68,8 +68,10 @@ spec:
             {{- end }}
           lifecycle:
             preStop:
-              exec:
-                command: ["sleep", "3"]
+              # Native sleep: the distroless proxy image has no `sleep` binary (an exec hook fails and the pod
+              # would be killed before endpoints propagate).
+              sleep:
+                seconds: 3
           ports:
             - name: http
               containerPort: {{ .port }}
