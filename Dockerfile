@@ -15,10 +15,14 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
     -o /out/checker ./cmd/checker
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+    -o /out/keys-manager ./cmd/keys-manager
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/llm-proxy-manifestd /llm-proxy-manifestd
 COPY --from=build /out/checker /checker
+COPY --from=build /out/keys-manager /keys-manager
 EXPOSE 8080
 USER nonroot:nonroot
 ENTRYPOINT ["/llm-proxy-manifestd"]

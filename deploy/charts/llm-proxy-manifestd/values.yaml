@@ -112,12 +112,14 @@ adapters:
 
 # Client API keys: when `config.clients` has at least one entry, every /v1/ call
 # (and /status) needs a key (`x-api-key: <key>` or `Authorization: Bearer <key>`).
-# The chart generates one random key per client name in a Secret
-# `<release>-client-keys` (kept across upgrades via `lookup`) and mounts it into
-# the proxy; keys never appear in the ConfigMap. Use `{}` (not null) for a client
-# without settings. `lookup` is empty under `helm template`/--dry-run/Argo CD, where
-# every render would regenerate keys: use the escape hatch below there.
-# Name of an existing Secret whose keys are the client names (GitOps/SOPS):
+# The `keys-manager` init container (same image, own ServiceAccount + Role limited to that
+# Secret) creates the Secret `<release>-client-keys` if absent and adds a random key for each
+# client that has none; it never overwrites a key and drops keys of removed clients. The Secret
+# is not a Helm/Argo-managed object, so it survives syncs and uninstall. A client added later gets
+# its key at the next pod restart. Keys never appear in the ConfigMap. Use `{}` (not null) for a
+# client without settings. The API token is mounted only in that init container.
+# Escape hatch (GitOps/SOPS): name of an existing Secret whose keys are the client names; the init
+# container and RBAC are then not rendered.
 clientsExistingSecret: ""
 
 # Rendered as config.yaml (provider pools are merged into `pools`). Changing it hot-reloads the running pods.

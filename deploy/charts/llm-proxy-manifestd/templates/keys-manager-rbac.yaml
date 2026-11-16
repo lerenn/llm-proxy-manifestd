@@ -1,0 +1,44 @@
+{{- if include "llm-proxy-manifestd.keysManager" . }}
+{{- /*
+  The client keys Secret itself is NOT rendered: the keys-manager init container
+  creates it (and fills in missing keys), so Helm/Argo CD never own or prune it.
+*/ -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "llm-proxy-manifestd.fullname" . }}
+  labels:
+    {{- include "llm-proxy-manifestd.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "llm-proxy-manifestd.fullname" . }}-keys-manager
+  labels:
+    {{- include "llm-proxy-manifestd.labels" . | nindent 4 }}
+rules:
+  # create cannot be restricted by resourceNames.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ include "llm-proxy-manifestd.clientKeysSecret" . | quote }}]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "llm-proxy-manifestd.fullname" . }}-keys-manager
+  labels:
+    {{- include "llm-proxy-manifestd.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "llm-proxy-manifestd.fullname" . }}-keys-manager
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "llm-proxy-manifestd.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
