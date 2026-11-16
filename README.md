@@ -91,7 +91,7 @@ The image also contains `/checker`, which validates a manifest with the proxy's 
 
 ## Subscription accounts (CLI adapters)
 
-To use a Claude subscription login, define `accounts:` in the Helm values. Each account becomes a loopback-only adapter sidecar (one per account, its own pool), a PVC for the login and a matching pool, and the pod switches to `replicas: 1` / `Recreate`.
+To use a Claude subscription login, define `accounts:` in the Helm values. Each account becomes a loopback-only adapter sidecar (Anthropic Messages API, one per account, its own pool), a PVC for the login and a matching pool, and the pod switches to `replicas: 1` / `Recreate`.
 
 ```yaml
 accounts:

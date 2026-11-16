@@ -66,6 +66,11 @@ accounts: {}
 # First loopback port assigned to accounts (sorted by name, +1 each).
 accountsBasePort: 9100
 
+# Emit `protocol:` (claude -> anthropic, codex -> openai) on the generated
+# pools. Keep false until the proxy release you run supports pool `protocol`
+# (its config parser rejects unknown fields); it is required once that ships.
+accountsEmitProtocol: false
+
 # Defaults for each account's login volume (ReadWriteOnce).
 accountStorage:
   size: 1Gi

@@ -8,7 +8,7 @@ pod
 └─ claude-subscription         127.0.0.1:9100  (adapter + official `claude` CLI, login on a PVC)
 ```
 
-The adapter listens on loopback only, so it needs no `api_key` and no NetworkPolicy.
+The Claude adapter speaks the **Anthropic Messages API** (`POST /v1/messages`, streaming SSE and non-stream, plus `GET /ready`), so Claude Code style clients can be served. Routing a client's Anthropic requests to it depends on the proxy supporting pool `protocol: anthropic` and per-route `endpoints` (a separate change). The adapter listens on loopback only, so it needs no `api_key` and no NetworkPolicy.
 
 ::: warning Status
 The Claude adapter has only been tested against a fake CLI that emits the documented `stream-json` events. It has **never run against a real subscription login**. Details in [Unverified](#unverified).
@@ -53,7 +53,9 @@ For every entry in `accounts` the chart renders:
 
 - one sidecar container named after the account, listening on `127.0.0.1:<port>`; ports are assigned deterministically (`accountsBasePort` + index of the account in alphabetical order) unless `port` is set;
 - one PVC `<release>-<account>` mounted at `/data/claude` (`CLAUDE_CONFIG_DIR`), holding the login;
-- a pool with the account's name (`upstream_url: http://localhost:<port>`, `max_concurrency`) merged into `config.pools`. A clash with a user-defined pool of the same name fails the render.
+- a pool with the account's name (`upstream_url: http://localhost:<port>`, `max_concurrency`, and `protocol: anthropic` for claude accounts when `accountsEmitProtocol: true`) merged into `config.pools`. A clash with a user-defined pool of the same name fails the render.
+
+`accountsEmitProtocol` defaults to `false` because the currently released proxy rejects unknown pool fields; it becomes required once the proxy release with pool `protocol` ships.
 
 Spread a route over several accounts with `pools: [claude-a, claude-b]` (see [Multi-pool routing](./multi-pool-routing)).
 
@@ -74,7 +76,7 @@ The login is stored on the PVC and survives restarts. Readiness is decided by th
 
 The model string may carry an `@low`, `@medium` or `@high` suffix, e.g. `claude-sonnet-5-5@medium`. The adapter strips it and passes it to the CLI as `--effort`. Any other suffix is a 400.
 
-Each request runs a fresh `claude` process (`-p`, `--input-format/--output-format stream-json`, `--include-partial-messages`, `--tools ""`, `--no-session-persistence`, no MCP servers, settings sources ignored). Multi-turn chat histories are flattened into one prompt; system messages become the system prompt. Early failures (before any output) return 5xx so the proxy can fail over to another pool.
+Each request runs a fresh `claude` process (`-p`, `--input-format/--output-format stream-json`, `--include-partial-messages`, `--tools ""`, `--no-session-persistence`, no MCP servers, settings sources ignored). Multi-turn chat histories are flattened into one prompt; the `system` field becomes the system prompt; only text blocks are supported. Early failures (before any output) return 5xx so the proxy can fail over to another pool.
 
 ## Operations
 
