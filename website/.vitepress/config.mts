@@ -3,7 +3,7 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: 'llm-proxy-manifestd',
   description:
-    'Headless, manifest-driven priority and concurrency proxy for OpenAI-compatible LLM endpoints.',
+    'Kubernetes-native priority and concurrency proxy for OpenAI-compatible LLM endpoints: deployed with Helm, configured by a hot-reloading ConfigMap.',
   srcDir: 'docs',
   base: '/',
   cleanUrls: true,

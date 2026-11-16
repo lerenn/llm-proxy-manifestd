@@ -1,6 +1,8 @@
 # llm-proxy-manifestd
 
-Headless, IaC-first Go LLM reverse proxy for Kubernetes with priority queuing, per-pool concurrency limits, SSE streaming, and ConfigMap hot-reloading—a public read-only status dashboard embedded in the binary, zero database.
+A Kubernetes-native LLM reverse proxy, deployed with a Helm chart and configured through a ConfigMap that hot-reloads. It adds priority queuing, per-pool concurrency limits and SSE streaming in front of OpenAI-compatible endpoints, with a read-only status dashboard embedded in the binary and no database.
+
+> **Kubernetes-first.** The supported way to run this project is the Helm chart: the manifest is a ConfigMap that hot-reloads, and the proxy runs as a regular pod next to your upstream bridges. Running CLI adapters as sidecars in the same pod is planned, not yet released. The binary itself is a static Go program that reads a config file, so it can also run under Docker or on a laptop, but that is not the primary target.
 
 Everything is declared in a single YAML manifest delivered through Helm. There is nothing to click, nothing to migrate, and no state to back up: change your values, run `helm upgrade`, and the running proxy reloads the new manifest without dropping a single in-flight stream.
 

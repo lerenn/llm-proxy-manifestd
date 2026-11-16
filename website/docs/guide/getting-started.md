@@ -5,6 +5,10 @@
 a shared account never receives more parallel requests than you allow. Excess requests wait in a
 priority queue.
 
+::: tip Kubernetes-first
+This project targets Kubernetes: it is deployed with the Helm chart and configured through a ConfigMap that hot-reloads. Running CLI adapters as sidecars in the same pod is planned, not yet released. The binary is a static Go program that reads a config file, so it can run under Docker or on a laptop too, but Kubernetes is the primary, supported target.
+:::
+
 ## Install
 
 Create a secret holding the credentials referenced from the manifest as `${VAR}`:
