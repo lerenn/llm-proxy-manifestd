@@ -19,6 +19,12 @@ Each subscription provider gets its own Deployment (1 replica, `Recreate`, its l
 
 Rolling the **adapter** pod itself still restarts it (Recreate, one login at a time); only the proxy rolls with surge.
 
+### What happens to in-flight requests when an adapter restarts
+
+A restart never cuts a running turn. On SIGTERM/SIGINT the adapter stops accepting new requests, `GET /ready` answers `503 shutting down` immediately, and it waits for in-flight requests (and the CLI processes serving them) to finish, then exits 0. The wait is bounded by `--shutdown-timeout` (env `ADAPTER_SHUTDOWN_TIMEOUT`, default `10m`); after it the remaining CLI processes are killed (process-group kill) and the adapter exits non-zero. Client disconnects still interrupt the turn as usual.
+
+The chart gives adapter containers a 3 s `preStop` sleep (the Service stops routing before SIGTERM) and sets `ADAPTER_SHUTDOWN_TIMEOUT` to `terminationGracePeriodSeconds` minus 5 s (595 s by default), so the drain always fits in the grace period. If you raise the timeout yourself, keep it below `terminationGracePeriodSeconds`.
+
 ### Adapter token
 
 Adapters listen on the pod IP in this mode, so any pod in the cluster could otherwise spend your subscription. They therefore require a shared token: every request except `GET /ready` needs `Authorization: Bearer <token>`, else **401**. (One header for both adapters, including the Anthropic shape of `claude`.)

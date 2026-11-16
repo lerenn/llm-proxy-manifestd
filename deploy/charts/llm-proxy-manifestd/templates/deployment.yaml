@@ -222,11 +222,17 @@ spec:
               value: {{ .type | quote }}
             - name: ADAPTER_LISTEN
               value: "127.0.0.1:{{ .port }}"
+            - name: ADAPTER_SHUTDOWN_TIMEOUT
+              value: {{ printf "%ds" (sub (int $.Values.terminationGracePeriodSeconds) 5) | quote }}
             - name: {{ .homeEnv }}
               value: {{ .dataDir }}
             {{- with $a.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "3"]
           # No readinessProbe on purpose: an adapter that is not logged in
           # must not make the whole pod NotReady (the Service would lose its
           # endpoints, taking api pools and failover targets down with it).

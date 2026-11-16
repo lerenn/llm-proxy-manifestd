@@ -176,6 +176,7 @@ Each request runs a fresh `claude` process (`-p`, `--input-format/--output-forma
 ## Operations
 
 - **Rollout means a brief outage** in sidecar mode (`adapters.mode: separate` + Valkey avoids it: see [Rolling updates](/guide/rolling-updates)). `Recreate` stops the old pod before starting the new one (a login volume is ReadWriteOnce and a provider must not run twice).
+- **In-flight requests survive an adapter restart**: on SIGTERM the adapter drains (new requests refused, `/ready` 503) and lets running CLI turns finish, up to `--shutdown-timeout` / `ADAPTER_SHUTDOWN_TIMEOUT` (default 10m, chart: `terminationGracePeriodSeconds` - 5 s). See [Rolling updates](/guide/rolling-updates).
 - **Adding or removing a provider restarts the pod** (it changes the pod spec). Edits to `config` alone (endpoints, priorities) hot-reload without a restart.
 - Uninstalling the release deletes the PVCs and therefore the logins.
 
