@@ -183,3 +183,56 @@ func TestWatchDetectsSymlinkSwap(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+const twoPools = "pools:\n  a: {upstream_url: 'http://x', max_concurrency: 1}\n  b: {upstream_url: 'http://y', max_concurrency: 1}\n"
+
+func TestRoutePoolsValidation(t *testing.T) {
+	bad := map[string]string{
+		"both":       "routes:\n  r: {pool: a, pools: [b]}\n",
+		"empty list": "routes:\n  r: {pools: []}\n",
+		"none":       "routes:\n  r: {priority: 1}\n",
+		"unknown":    "routes:\n  r: {pools: [a, zzz]}\n",
+		"duplicate":  "routes:\n  r: {pools: [a, b, a]}\n",
+		"bad field":  "routes:\n  r: {pools: [a], poolz: [b]}\n",
+	}
+	for name, r := range bad {
+		if _, err := Parse([]byte(twoPools + r)); err == nil {
+			t.Errorf("%s: expected error", name)
+		}
+	}
+	c, err := Parse([]byte(twoPools + "routes:\n  s: {pool: a}\n  m: {pools: [b, a], target_model: 'claude-sonnet-5-5@medium'}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Routes["s"].Pools; len(got) != 1 || got[0] != "a" {
+		t.Fatalf("single pool not normalised: %v", got)
+	}
+	if got := c.Routes["m"].Pools; len(got) != 2 || got[0] != "b" || got[1] != "a" {
+		t.Fatalf("order lost: %v", got)
+	}
+	if c.Routes["m"].TargetModel != "claude-sonnet-5-5@medium" {
+		t.Fatal("target_model altered")
+	}
+}
+
+func TestReloadRoutePools(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	write(t, path, twoPools+"routes:\n  r: {pool: a}\n")
+	l := NewLoader(path, quiet())
+	if err := l.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	first := l.State()
+	write(t, path, twoPools+"routes:\n  r: {pools: [a, b]}\n")
+	if err := l.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	second := l.State()
+	if len(second.Config.Routes["r"].Pools) != 2 || second.Pools["a"] != first.Pools["a"] {
+		t.Fatal("route pools not reloaded or pool instance not preserved")
+	}
+	write(t, path, twoPools+"routes:\n  r: {pools: [a, nope]}\n")
+	if err := l.Reload(); err == nil || l.State() != second {
+		t.Fatal("invalid route must be rejected and previous state kept")
+	}
+}

@@ -91,11 +91,17 @@ type PoolConfig struct {
 	Parsed *url.URL `yaml:"-"`
 }
 
-// Route maps a client-facing model name to a pool.
+// Route maps a client-facing model name to one or more pools. Set exactly one
+// of Pool (single pool) or Pools (ordered list). After validation Pools is
+// always populated (Pool is expanded into a one-element list).
+//
+// TargetModel is passed upstream verbatim as an opaque string; a suffix such
+// as "@medium" has no meaning to the proxy.
 type Route struct {
-	Pool        string `yaml:"pool"`
-	TargetModel string `yaml:"target_model"`
-	Priority    int    `yaml:"priority"`
+	Pool        string   `yaml:"pool"`
+	Pools       []string `yaml:"pools"`
+	TargetModel string   `yaml:"target_model"`
+	Priority    int      `yaml:"priority"`
 }
 
 // Parse expands environment variables in raw, unmarshals and validates it.
@@ -157,9 +163,27 @@ func (c *Config) validate() error {
 		c.Pools[name] = p
 	}
 	for name, r := range c.Routes {
-		if _, ok := c.Pools[r.Pool]; !ok {
-			return fmt.Errorf("route %q: unknown pool %q", name, r.Pool)
+		switch {
+		case r.Pool != "" && r.Pools != nil:
+			return fmt.Errorf("route %q: pool and pools are mutually exclusive", name)
+		case r.Pools != nil && len(r.Pools) == 0:
+			return fmt.Errorf("route %q: pools must not be empty", name)
+		case r.Pool == "" && r.Pools == nil:
+			return fmt.Errorf("route %q: one of pool or pools is required", name)
+		case r.Pools == nil:
+			r.Pools = []string{r.Pool}
 		}
+		seen := make(map[string]bool, len(r.Pools))
+		for _, pn := range r.Pools {
+			if _, ok := c.Pools[pn]; !ok {
+				return fmt.Errorf("route %q: unknown pool %q", name, pn)
+			}
+			if seen[pn] {
+				return fmt.Errorf("route %q: duplicate pool %q", name, pn)
+			}
+			seen[pn] = true
+		}
+		c.Routes[name] = r
 	}
 	return nil
 }

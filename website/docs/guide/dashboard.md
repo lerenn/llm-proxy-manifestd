@@ -5,7 +5,7 @@ build step) and served by the proxy itself. It polls every 2 seconds and follows
 `prefers-color-scheme`.
 
 It shows: overall status, version, uptime, slots used/total, queued requests (total and per
-priority, per pool), a per-route table (upstream host, priority, in flight, queued, requests,
+priority, per pool), a per-route table (pools and upstream hosts, priority, in flight, queued, requests,
 errors) and the last config reload (generation, age, and whether the latest attempt was rejected).
 Request and error counters are per process and reset on restart.
 
