@@ -1,0 +1,23 @@
+---
+layout: home
+hero:
+  name: llm-proxy-manifestd
+  text: A headless proxy for shared AI accounts
+  tagline: Per-account concurrency limits and priority queues for parallel AI coding sessions. Manifest-driven. No UI. No database.
+  actions:
+    - theme: brand
+      text: Get Started
+      link: /guide/getting-started
+    - theme: alt
+      text: Architecture
+      link: /guide/architecture
+features:
+  - title: IaC-first
+    details: One YAML manifest, shipped as a Kubernetes ConfigMap and installed with Helm. Nothing to click.
+  - title: Priority queues
+    details: Interactive sessions jump ahead of background agents. Optional aging prevents starvation.
+  - title: Zero-buffer streaming
+    details: SSE responses are flushed as they arrive, and each slot is held until the stream ends.
+  - title: Safe hot reloads
+    details: ConfigMap changes are applied live. Invalid configs are rejected, in-flight streams are never dropped.
+---
