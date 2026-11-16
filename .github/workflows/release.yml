@@ -1,5 +1,10 @@
 name: Release
 
+# Manual releases only: pushing a v* tag by hand (with a user token) publishes it.
+# Tags created by auto-release.yml use GITHUB_TOKEN and therefore do NOT trigger
+# this workflow (GitHub does not start workflows from GITHUB_TOKEN events),
+# so there is no double publishing.
+
 on:
   push:
     tags: ["v*"]
