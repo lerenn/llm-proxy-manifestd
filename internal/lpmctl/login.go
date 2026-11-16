@@ -62,6 +62,12 @@ func Login(ctx context.Context, t *Target, ex Executor, name string, o LoginOpti
 		}
 	}
 	if prov == nil {
+		cfg, _ := t.LoadManifest(ctx, t.ConfigMapName(pod))
+		for _, g := range cfg.APIGroups() {
+			if g.Name == name {
+				return fmt.Errorf("provider %q is an API provider (%s): no login needed, it authenticates with an API key from a Secret", name, strings.Join(g.Protocols, ","))
+			}
+		}
 		for _, p := range APIProviders(pod, nil) {
 			if p.Name == name {
 				return fmt.Errorf("provider %q is an API-key provider: there is nothing to log in to, its key comes from secret %s (key %s)", name, p.SecretName, p.SecretKey)

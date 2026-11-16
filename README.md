@@ -95,7 +95,7 @@ Define `clients:` in the manifest to require an API key (`x-api-key` or `Authori
 
 ## lpmctl (CLI)
 
-`lpmctl` runs on your machine with your kubeconfig (it is not in any image): `lpmctl keys [client]` prints the client keys (only the key with a name, pipe-friendly), `lpmctl status` shows each provider's login state and the configured clients, `lpmctl login <provider>` opens the interactive CLI login in a subscription sidecar. Binaries for linux/darwin (amd64, arm64) with sha256 checksums are attached to each [GitHub release](https://github.com/lerenn/llm-proxy-manifestd/releases). See the [lpmctl guide](https://llm-proxy-manifestd.lerenn.dev/guide/lpmctl) (flags, RBAC).
+`lpmctl` runs on your machine with your kubeconfig (it is not in any image): `lpmctl keys [client]` prints the client keys (only the key with a name, pipe-friendly), `lpmctl status` shows each provider's login state (API providers listed as `no login needed`, concurrency-group pools on one line) and the configured clients, `lpmctl login <provider>` opens the interactive CLI login in a subscription sidecar. Binaries for linux/darwin (amd64, arm64) with sha256 checksums are attached to each [GitHub release](https://github.com/lerenn/llm-proxy-manifestd/releases). See the [lpmctl guide](https://llm-proxy-manifestd.lerenn.dev/guide/lpmctl) (flags, RBAC).
 
 ## Dashboard
 
