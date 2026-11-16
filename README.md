@@ -1,4 +1,6 @@
-# llm-proxy-manifestd
+<p align="center"><img src="logo.svg" alt="LLM Proxy ManifestD logo" width="96"></p>
+
+# LLM Proxy ManifestD
 
 A Kubernetes-native LLM reverse proxy, deployed with a Helm chart and configured through a ConfigMap that hot-reloads. It adds priority queuing, per-pool concurrency limits and SSE streaming in front of OpenAI-compatible endpoints, with a read-only status dashboard embedded in the binary and no database. Optional CLI sidecars (Claude, experimental) can run alongside it in the same pod.
 
