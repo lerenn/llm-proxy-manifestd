@@ -8,7 +8,7 @@ pod
 └─ claude-subscription         127.0.0.1:9100  (adapter + official `claude` CLI, login on a PVC)
 ```
 
-The Claude adapter speaks the **Anthropic Messages API** (`POST /v1/messages`, streaming SSE and non-stream, plus `GET /ready`), so Claude Code style clients can be served. Routing a client's Anthropic requests to it depends on the proxy supporting pool `protocol: anthropic` and per-route `endpoints` (a separate change). The adapter listens on loopback only, so it needs no `api_key` and no NetworkPolicy.
+The Claude adapter speaks the **Anthropic Messages API** (`POST /v1/messages`, streaming SSE and non-stream, plus `GET /ready`), so Claude Code style clients can be served. Claude clients call `/v1/messages` on the proxy, which uses a route's `anthropic` endpoint (see [Protocol endpoints](./protocol-endpoints)): **a route needs `endpoints.anthropic` to be reachable by Claude clients**, otherwise it answers 404 `endpoint_not_configured`. The adapter listens on loopback only, so it needs no `api_key` and no NetworkPolicy.
 
 ::: warning Status
 The Claude adapter has only been tested against a fake CLI that emits the documented `stream-json` events. It has **never run against a real subscription login**. Details in [Unverified](#unverified).
@@ -36,30 +36,26 @@ adapters:
     image: {repository: ghcr.io/lerenn/llm-proxy-manifestd-adapter-claude, tag: ""}  # tag defaults to appVersion
 
 config:
-  pools: null                 # drop the chart's default example pool
   routes:
-    codex-interactive: null   # drop the chart's default example routes
-    codex-default: null
-    codex-background: null
-    fast:            {pool: claude-subscription, target_model: "claude-haiku-5-5@low",    priority: 10}
-    standard-low:    {pool: claude-subscription, target_model: "claude-sonnet-5-5@low",   priority: 50}
-    standard-medium: {pool: claude-subscription, target_model: "claude-sonnet-5-5@medium", priority: 50}
-    standard-high:   {pool: claude-subscription, target_model: "claude-sonnet-5-5@high",  priority: 50}
-    premium-high:    {pool: claude-subscription, target_model: "claude-opus-5-5@high",    priority: 80}
-    frontier-high:   {pool: claude-subscription, target_model: "claude-fable-5-2@high",   priority: 90}
+    fast:            {endpoints: {anthropic: {pools: [claude-subscription], target_model: "claude-haiku-5-5@low",     priority: 10}}}
+    standard-low:    {endpoints: {anthropic: {pools: [claude-subscription], target_model: "claude-sonnet-5-5@low",    priority: 50}}}
+    standard-medium: {endpoints: {anthropic: {pools: [claude-subscription], target_model: "claude-sonnet-5-5@medium", priority: 50}}}
+    standard-high:   {endpoints: {anthropic: {pools: [claude-subscription], target_model: "claude-sonnet-5-5@high",   priority: 50}}}
+    premium-high:    {endpoints: {anthropic: {pools: [claude-subscription], target_model: "claude-opus-5-5@high",     priority: 80}}}
+    frontier-high:   {endpoints: {anthropic: {pools: [claude-subscription], target_model: "claude-fable-5-2@high",    priority: 90}}}
 ```
 
 For every entry in `accounts` the chart renders:
 
 - one sidecar container named after the account, listening on `127.0.0.1:<port>`; ports are assigned deterministically (`accountsBasePort` + index of the account in alphabetical order) unless `port` is set;
 - one PVC `<release>-<account>` mounted at `/data/claude` (`CLAUDE_CONFIG_DIR`), holding the login;
-- a pool with the account's name (`upstream_url: http://localhost:<port>`, `max_concurrency`, and `protocol: anthropic` for claude accounts when `accountsEmitProtocol: true`) merged into `config.pools`. A clash with a user-defined pool of the same name fails the render.
+- a pool with the account's name (`upstream_url: http://localhost:<port>`, `max_concurrency`, and `protocol: anthropic` for claude accounts when ``) merged into `config.pools`. A clash with a user-defined pool of the same name fails the render.
 
-`accountsEmitProtocol` defaults to `false` because the currently released proxy rejects unknown pool fields; it becomes required once the proxy release with pool `protocol` ships.
+The chart's example pool and routes (`defaultPools`/`defaultRoutes`) are only applied when `accounts` is empty, so they never interfere with account setups.
 
 Spread a route over several accounts with `pools: [claude-a, claude-b]` (see [Multi-pool routing](./multi-pool-routing)).
 
-When at least one account exists the Deployment uses `replicas: 1` and `strategy: Recreate`, `automountServiceAccountToken: false`, non-root users (65532 for the proxy, 10001 for adapters), `readOnlyRootFilesystem`, all capabilities dropped, and a per-container readiness probe. With `accounts: {}` the chart renders exactly as before.
+When at least one account exists the Deployment uses `replicas: 1` and `strategy: Recreate`, `automountServiceAccountToken: false`, non-root users (65532 for the proxy, 10001 for adapters), `readOnlyRootFilesystem`, all capabilities dropped, a `check-config` init container that runs `/checker -f` on the rendered config (from the proxy image), and a per-container readiness probe. With `accounts: {}` the chart renders exactly as before.
 
 ## Login
 

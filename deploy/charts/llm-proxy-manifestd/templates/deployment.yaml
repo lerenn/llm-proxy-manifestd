@@ -41,8 +41,25 @@ spec:
           type: RuntimeDefault
       {{- end }}
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
-      {{- /* TODO(follow-up): add an initContainer here running
-          `llm-proxy-manifestd validate` on the rendered config before the pod starts. */}}
+      {{- if $accounts }}
+      initContainers:
+        # Fail the rollout early on an invalid config (pools, routes, endpoints).
+        - name: check-config
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/checker"]
+          args: ["-f", "/etc/llm-proxy-manifestd/config.yaml"]
+          securityContext:
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/llm-proxy-manifestd
+              readOnly: true
+      {{- end }}
       containers:
         - name: llm-proxy-manifestd
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"

@@ -66,11 +66,6 @@ accounts: {}
 # First loopback port assigned to accounts (sorted by name, +1 each).
 accountsBasePort: 9100
 
-# Emit `protocol:` (claude -> anthropic, codex -> openai) on the generated
-# pools. Keep false until the proxy release you run supports pool `protocol`
-# (its config parser rejects unknown fields); it is required once that ships.
-accountsEmitProtocol: false
-
 # Defaults for each account's login volume (ReadWriteOnce).
 accountStorage:
   size: 1Gi
@@ -91,14 +86,26 @@ config:
     listen: ":8080"
     queue_timeout: "120s"
     aging_interval: "5s"
-  pools:
-    codex-sub:
-      upstream_url: http://cliproxyapi.default.svc.cluster.local:8317
-      api_key: "${LOCAL_BRIDGE_KEY}"
-      max_concurrency: 2
+  # Add your own pools/routes here. With no `accounts`, the chart also applies
+  # `defaultPools`/`defaultRoutes` below (the original example config) under yours.
+  pools: {}
   routes:
-    codex-interactive: {pool: codex-sub, target_model: gpt-5.4, priority: 100}
-    codex-default: {pool: codex-sub, target_model: gpt-5.4, priority: 50}
-    codex-background: {pool: codex-sub, target_model: gpt-5.4, priority: 10}
     # Several pools per route (least in-flight first, failover on 5xx/transport error):
     # standard-medium: {pools: [claude-a, claude-b], target_model: "claude-sonnet-5-5@medium", priority: 50}
+    # Per-protocol endpoints (Claude clients use the anthropic endpoint):
+    # fast:
+    #   endpoints:
+    #     anthropic: {pools: [claude-subscription], target_model: "claude-haiku-5-5@low", priority: 10}
+    {}
+
+# Example pool and routes applied only when `accounts` is empty (kept so that
+# existing installs render unchanged). Set both to {} to disable.
+defaultPools:
+  codex-sub:
+    upstream_url: http://cliproxyapi.default.svc.cluster.local:8317
+    api_key: "${LOCAL_BRIDGE_KEY}"
+    max_concurrency: 2
+defaultRoutes:
+  codex-interactive: {pool: codex-sub, target_model: gpt-5.4, priority: 100}
+  codex-default: {pool: codex-sub, target_model: gpt-5.4, priority: 50}
+  codex-background: {pool: codex-sub, target_model: gpt-5.4, priority: 10}
