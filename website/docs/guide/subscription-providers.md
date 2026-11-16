@@ -110,7 +110,7 @@ For every entry in `providers` the chart renders:
 
 - one sidecar container named after the provider, listening on `127.0.0.1:<port>`; ports are assigned deterministically (`providersBasePort` + index among `claude` providers in alphabetical order) unless `port` is set;
 - one PVC `<release>-<provider>` mounted at `/data/claude` (`CLAUDE_CONFIG_DIR`), holding the login;
-- a pool with the provider's name (`upstream_url: http://localhost:<port>`, `max_concurrency`, and `protocol: anthropic` for claude providers when ``) merged into `config.pools`. A clash with a user-defined pool of the same name fails the render.
+- a pool with the provider's name (`upstream_url: http://localhost:<port>`, `max_concurrency`, and `protocol: anthropic` for claude providers, `protocol: openai` for codex providers) merged into `config.pools`. A clash with a user-defined pool of the same name fails the render.
 
 The chart's example pool and endpoints (`defaultPools`/`defaultEndpoints`) are only applied when `providers` is empty, so they never interfere with provider setups.
 
@@ -162,11 +162,12 @@ Each request runs a fresh `claude` process (`-p`, `--input-format/--output-forma
 providers:
   codex-subscription: {type: codex, maxConcurrency: 2}
 config:
-  routes:
-    fast:
-      endpoints:
-        openai: {pools: [codex-subscription], target_model: "gpt-5.4@low", priority: 10}
+  endpoints:
+    openai:
+      fast: {priority: 10, targets: [{pool: codex-subscription, target_model: "gpt-5.4@low"}]}
 ```
+
+Codex pools speak the OpenAI protocol, so their endpoints go under `endpoints.openai` (clients call `/v1/chat/completions` on the proxy).
 
 A `codex` provider renders the same pieces as `claude` (loopback sidecar, PVC at `/data/codex` with `CODEX_HOME`, exec readiness probe, pool with `protocol: openai`; ports are shared with Claude sidecars in name order) and follows the same Recreate / hardening rules. The sidecar (`ghcr.io/lerenn/llm-proxy-manifestd-adapter-codex`, command `cmd/codex`) exposes the **OpenAI chat-completions API** (`POST /v1/chat/completions`, streaming SSE and non-stream, plus `GET /ready`; there is no `/v1/models`). The `@low|@medium|@high` suffix is stripped and sent as the turn's `effort`; other suffixes are a 400.
 

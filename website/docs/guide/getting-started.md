@@ -6,7 +6,7 @@ a shared account never receives more parallel requests than you allow. Excess re
 priority queue.
 
 ::: tip Kubernetes-first
-This project targets Kubernetes: it is deployed with the Helm chart and configured through a ConfigMap that hot-reloads. Optional CLI sidecars for Claude (and experimental Codex) subscription logins run in the same pod via the chart's `providers:` value (see [Subscription providers](/guide/subscription-providers)); the adapter is experimental and has never run against a real login. A Codex sidecar is available as an experimental provider type (also never run against a real login). Sidecar-less API providers (`anthropic-api`, `openai-api`) also exist. The binary is a static Go program that reads a config file, so it can run under Docker or on a laptop too, but Kubernetes is the primary, supported target.
+This project targets Kubernetes: it is deployed with the Helm chart and configured through a ConfigMap that hot-reloads. Optional CLI sidecars for Claude and Codex subscription logins run in the same pod via the chart's `providers:` value (see [Subscription providers](/guide/subscription-providers)); both adapters are experimental and have never run against a real login. Sidecar-less API providers (`anthropic-api`, `openai-api`) also exist. The binary is a static Go program that reads a config file, so it can run under Docker or on a laptop too, but Kubernetes is the primary, supported target.
 :::
 
 ## Install
