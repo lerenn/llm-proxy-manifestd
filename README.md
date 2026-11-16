@@ -89,6 +89,10 @@ providers:
 
 Log in with `kubectl exec -it deploy/<release>-llm-proxy-manifestd -c claude-subscription -- claude` then `/login`. Rollouts cause a brief outage; adding a provider restarts the pod, config edits hot-reload. The adapter has not been run against a real subscription yet, and using a subscription this way may be restricted by the vendor's terms: it is for a single user with their own account, and you must check those terms yourself. See the [guide](website/docs/guide/subscription-providers.md).
 
+## Coordination (Valkey)
+
+Optional `coordination.valkey` shares slot limits and the priority queue between several proxy pods (e.g. during a rolling update with surge) through a Valkey/Redis-protocol server; `fail_mode: open|closed` decides what happens when it is unreachable. Absent, everything stays in memory. See the [guide](website/docs/guide/coordination.md).
+
 ## Client API keys
 
 Define `clients:` in the manifest to require an API key (`x-api-key` or `Authorization: Bearer`) on `/v1/` calls; each client has an optional default `priority` and endpoint-name allow-list. The chart runs a `keys-manager` init container that creates one key per client in a Secret (never overwriting existing keys; works with Argo CD; a new client gets its key at the next pod restart; `clientsExistingSecret` to bring your own). Keys never appear in the ConfigMap. See [Client API keys](website/docs/guide/client-keys.md).

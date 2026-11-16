@@ -297,6 +297,13 @@ func (h *Handler) proxy(w http.ResponseWriter, r *http.Request) {
 					"timed out waiting for a free slot in pool '"+qt.pool+"'")
 				return
 			}
+			if errors.Is(err, pool.ErrCoordinationUnavailable) {
+				rc.errors.Add(1)
+				w.Header().Set("Retry-After", "5")
+				writeProtoError(w, proto, http.StatusServiceUnavailable, "server_error", "coordination_unavailable",
+					"the shared slot coordinator is unreachable")
+				return
+			}
 			var ae *acquireError
 			if errors.As(err, &ae) {
 				writeProtoError(w, proto, http.StatusInternalServerError, "server_error", "acquire_failed", ae.Error())
@@ -420,6 +427,9 @@ func (t *failoverTransport) acquire(ctx context.Context, remaining []int, rrStar
 		}
 		if errors.Is(aerr, context.DeadlineExceeded) {
 			return 0, nil, 0, &queueTimeoutError{pool: name}
+		}
+		if errors.Is(aerr, pool.ErrCoordinationUnavailable) {
+			return 0, nil, 0, aerr
 		}
 		return 0, nil, 0, &acquireError{aerr}
 	}

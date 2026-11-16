@@ -51,6 +51,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	for _, w := range cfg.Warnings() {
 		fmt.Fprintf(stderr, "warning: %s\n", w)
 	}
+	if v := cfg.Coordination; v != nil && v.Valkey != nil {
+		fmt.Fprintf(stdout, "coordination: valkey %s (fail_mode %s, lease_ttl %s)\n", v.Valkey.Address, v.Valkey.FailMode, v.Valkey.LeaseTTL.Std())
+	}
 	fmt.Fprintf(stdout, "config ok: %d pools%s, %d anthropic endpoints, %d openai endpoints\n",
 		len(cfg.Pools), groupNote(cfg), len(cfg.Endpoints[config.ProtocolAnthropic]), len(cfg.Endpoints[config.ProtocolOpenAI]))
 	return 0

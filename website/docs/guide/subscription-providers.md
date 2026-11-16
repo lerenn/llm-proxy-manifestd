@@ -91,6 +91,8 @@ pools:
 
 Pools in the same group share ONE slot limit and ONE wait queue, across protocols: priority and aging apply to all waiters of the group together. All members must declare the same `max_concurrency` (otherwise the config is rejected; `0` = unlimited is allowed). Hot reload keeps working: changing the limit resizes the live group without dropping held slots or queued requests, and adding or removing members keeps the group. In `/status` and the dashboard each member shows `concurrency_group`; its active/queued/limit numbers are the group's, and the dashboard totals count the group once. `/checker` validates the group and `auth` fields.
 
+To share a group's slots across several proxy pods, see [Coordination](/guide/coordination).
+
 ### Subscription with an API fallback
 
 List both pools as targets of one Anthropic endpoint. With `mode: failover` the subscription is always used first (requests queue on it when it is busy) and the API pool only takes a request when the subscription fails with a 5xx or transport error (see [Multi-pool routing](./multi-pool-routing)):

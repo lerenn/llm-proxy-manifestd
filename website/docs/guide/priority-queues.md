@@ -27,6 +27,8 @@ So a priority-10 background job that has waited 60 s outranks a freshly arrived 
 (10 + 12 = 22), and low-priority work cannot starve. Leave it unset to disable aging. Because effective
 priority depends on time, the queue is re-evaluated at the moment a slot is released.
 
+With several proxy pods (rolling updates), the queue can be shared: see [Coordination](/guide/coordination).
+
 ## Direct handoff
 
 When a slot is released and someone is waiting, it is handed **directly** to the best waiter: the

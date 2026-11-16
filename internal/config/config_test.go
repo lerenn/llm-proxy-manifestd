@@ -419,3 +419,32 @@ func TestConcurrencyGroupAndAuthValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestCoordinationBlock(t *testing.T) {
+	base := "pools:\n  p: {upstream_url: 'http://x', max_concurrency: 1}\nendpoints:\n  openai:\n    m: {targets: [{pool: p}]}\n"
+	c, err := Parse([]byte("coordination:\n  valkey: {address: 'v:6379'}\n" + base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := c.Coordination.Valkey
+	if v.KeyPrefix != "lpm" || v.LeaseTTL.Std() != 30*time.Second || v.FailMode != "open" || len(c.Warnings()) != 0 {
+		t.Fatalf("defaults: %+v %v", v, c.Warnings())
+	}
+	c, err = Parse([]byte("coordination:\n  valkey: {address: 'v:6379', lease_ttl: 2s}\n" + base))
+	if err != nil || len(c.Warnings()) != 1 || !strings.Contains(c.Warnings()[0], "lease_ttl") {
+		t.Fatalf("warn: %v %v", err, c)
+	}
+	for _, bad := range []string{
+		"coordination: {}\n",
+		"coordination:\n  valkey: {}\n",
+		"coordination:\n  valkey: {address: 'v:1', fail_mode: maybe}\n",
+		"coordination:\n  valkey: {address: 'v:1', lease_ttl: -1s}\n",
+	} {
+		if _, err := Parse([]byte(bad + base)); err == nil {
+			t.Fatalf("expected error for %q", bad)
+		}
+	}
+	if c, err := Parse([]byte(base)); err != nil || c.Coordination != nil {
+		t.Fatal("absent coordination must stay nil")
+	}
+}

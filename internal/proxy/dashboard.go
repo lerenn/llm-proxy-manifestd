@@ -95,6 +95,7 @@ type dashboardPool struct {
 	Queued         int              `json:"queued"`
 	QueueByPrio    []dashboardQueue `json:"queue_by_priority"`
 	TotalServed    int64            `json:"total_served"`
+	Coordinated    bool             `json:"coordinated,omitempty"` // slots/queue shared through Valkey
 }
 
 type dashboardTarget struct {
@@ -181,7 +182,7 @@ func (h *Handler) dashboardSnapshot() (dashboardState, bool) {
 		sort.Slice(prios, func(i, j int) bool { return prios[i].Priority > prios[j].Priority })
 		out.Pools = append(out.Pools, dashboardPool{
 			Name: n, Protocol: st.Config.Pools[n].Protocol, Group: group, Upstream: host, MaxConcurrency: s.MaxConcurrency, Unlimited: s.Unlimited, Active: s.Active,
-			Queued: s.QueueDepth, QueueByPrio: prios, TotalServed: s.TotalServed,
+			Queued: s.QueueDepth, QueueByPrio: prios, TotalServed: s.TotalServed, Coordinated: s.Coordinated,
 		})
 		if group != "" {
 			if counted[group] {

@@ -27,6 +27,7 @@ export default defineConfig({
           { text: 'Dashboard', link: '/guide/dashboard' },
           { text: 'Architecture', link: '/guide/architecture' },
           { text: 'Priority Queues', link: '/guide/priority-queues' },
+          { text: 'Coordination (Valkey)', link: '/guide/coordination' },
           { text: 'Multi-pool routing', link: '/guide/multi-pool-routing' },
           { text: 'Protocol endpoints & checker', link: '/guide/protocol-endpoints' },
           { text: 'Subscription providers', link: '/guide/subscription-providers' },

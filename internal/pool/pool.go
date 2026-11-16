@@ -18,6 +18,9 @@ type Stats struct {
 	Active         int   `json:"active_slots"`
 	QueueDepth     int   `json:"queue_depth"`
 	TotalServed    int64 `json:"total_served"`
+	// Coordinated is true when slots and queue are shared through Valkey and
+	// Active/QueueDepth are read from it.
+	Coordinated bool `json:"coordinated,omitempty"`
 }
 
 // Pool limits the number of concurrently held slots. Callers that cannot get
@@ -30,6 +33,9 @@ type Pool struct {
 	queue  waiterHeap
 	seq    uint64
 	served atomic.Int64
+
+	coord *Coordinator // nil = in-memory only
+	key   string       // shared key (pool name or concurrency group)
 
 	now func() time.Time // replaceable in tests
 }
@@ -60,6 +66,14 @@ func New(maxConcurrency int, aging time.Duration) *Pool {
 	return p
 }
 
+// NewShared is New for a pool whose slots and queue are shared with other
+// proxy pods through coord under key. Unlimited pools never touch the backend.
+func NewShared(maxConcurrency int, aging time.Duration, coord *Coordinator, key string) *Pool {
+	p := New(maxConcurrency, aging)
+	p.coord, p.key = coord, key
+	return p
+}
+
 // Resize updates the concurrency limit and aging interval on a live pool.
 // Raising the limit immediately hands slots to queued waiters; lowering it
 // never revokes slots already held, it only stops new grants until the
@@ -86,6 +100,13 @@ func (p *Pool) Resize(maxConcurrency int, aging time.Duration) {
 func (p *Pool) Acquire(ctx context.Context, priority int) (release func(), err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+
+	if p.sharedOn() {
+		rel, err := p.acquireShared(ctx, priority)
+		if err != errFallback {
+			return rel, err
+		}
 	}
 
 	p.mu.Lock()
@@ -127,6 +148,12 @@ func (p *Pool) Acquire(ctx context.Context, priority int) (release func(), err e
 // TryAcquire obtains a slot only if one is free right now and nobody is
 // queued. It never waits; ok is false when no slot was taken.
 func (p *Pool) TryAcquire() (release func(), ok bool) {
+	if p.sharedOn() {
+		rel, taken, err := p.tryShared()
+		if err != errFallback {
+			return rel, taken
+		}
+	}
 	p.mu.Lock()
 	if p.hasFreeLocked() && len(p.queue.items) == 0 {
 		p.active++
@@ -140,9 +167,21 @@ func (p *Pool) TryAcquire() (release func(), ok bool) {
 
 // Stats returns a snapshot of the pool state.
 func (p *Pool) Stats() Stats {
+	if p.sharedOn() {
+		if active, queue, ok := p.coord.snapshot(p.key); ok {
+			depth := 0
+			for _, n := range queue {
+				depth += n
+			}
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			return Stats{MaxConcurrency: p.max, Active: active, QueueDepth: depth,
+				TotalServed: p.served.Load(), Coordinated: true}
+		}
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return Stats{
+	return Stats{Coordinated: p.coord != nil && p.max != Unlimited,
 		MaxConcurrency: p.max,
 		Unlimited:      p.max == Unlimited,
 		Active:         p.active,
@@ -153,6 +192,11 @@ func (p *Pool) Stats() Stats {
 
 // QueueByPriority returns the number of waiters per base (non-aged) priority.
 func (p *Pool) QueueByPriority() map[int]int {
+	if p.sharedOn() {
+		if _, queue, ok := p.coord.snapshot(p.key); ok {
+			return queue
+		}
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	out := make(map[int]int)
