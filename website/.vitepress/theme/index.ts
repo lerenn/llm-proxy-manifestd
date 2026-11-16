@@ -6,6 +6,6 @@ export default {
   extends: DefaultTheme,
   Layout: () =>
     h(DefaultTheme.Layout, null, {
-      'home-hero-actions-after': () => h(HelmPodOverview),
+      'home-hero-after': () => h(HelmPodOverview),
     }),
 }

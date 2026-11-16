@@ -68,7 +68,11 @@ dashboard:
 </template>
 
 <style scoped>
-.hpo { margin-top: 32px; width: 100%; max-width: 960px; text-align: left; }
+.hpo { box-sizing: border-box; margin: 0; padding: 8px 24px 32px; width: 100%; text-align: left; }
+.hpo > * { max-width: 1152px; margin-left: auto; margin-right: auto; }
+/* Same horizontal padding as VitePress's feature cards (.VPFeatures) so both blocks line up. */
+@media (min-width: 640px) { .hpo { padding-left: 48px; padding-right: 48px; } }
+@media (min-width: 960px) { .hpo { padding-left: 64px; padding-right: 64px; } }
 .hpo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
 @media (max-width: 768px) { .hpo-grid { grid-template-columns: 1fr; } }
 .hpo-col { min-width: 0; }
@@ -93,5 +97,5 @@ dashboard:
 @media (max-width: 480px) { .hpo-sidecars { grid-template-columns: 1fr; } }
 .hpo-exp { border-style: dashed; }
 .hpo-exp em { font-size: 11.5px; font-style: normal; color: var(--vp-c-warning-1); }
-.hpo-caption { margin: 12px 0 0; font-size: 12.5px; color: var(--vp-c-text-3); text-align: center; }
+.hpo > .hpo-caption { margin-top: 12px; margin-bottom: 0; font-size: 12.5px; color: var(--vp-c-text-3); text-align: center; }
 </style>
