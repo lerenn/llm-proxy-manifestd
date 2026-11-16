@@ -11,10 +11,14 @@ COPY internal ./internal
 COPY ui ./ui
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
-    -o /out/llm-proxy-manifestd ./cmd/llm-proxy-manifestd
+    -o /out/llm-proxy-manifestd ./cmd/proxy
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+    -o /out/checker ./cmd/checker
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/llm-proxy-manifestd /llm-proxy-manifestd
+COPY --from=build /out/checker /checker
 EXPOSE 8080
 USER nonroot:nonroot
 ENTRYPOINT ["/llm-proxy-manifestd"]

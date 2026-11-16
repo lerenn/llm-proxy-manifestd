@@ -1,0 +1,53 @@
+package main
+
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func check(t *testing.T, yml string) (int, string, string) {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "c.yaml")
+	if err := os.WriteFile(p, []byte(yml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	code := run([]string{"-f", p}, &out, &errb)
+	return code, out.String(), errb.String()
+}
+
+func TestCheckerValidUnsetEnv(t *testing.T) {
+	os.Unsetenv("NOPE_KEY")
+	code, out, _ := check(t, "pools:\n  p: {upstream_url: 'http://x', api_key: '${NOPE_KEY}', max_concurrency: 1}\nroutes:\n  r: {pool: p}\n")
+	if code != 0 || !strings.Contains(out, "1 pools, 1 routes") {
+		t.Fatalf("code=%d out=%q", code, out)
+	}
+}
+
+func TestCheckerInvalidNoSecret(t *testing.T) {
+	t.Setenv("K", "topsecret")
+	code, out, errs := check(t, "pools:\n  p: {upstream_url: 'http://u:topsecret@', api_key: '${K}', max_concurrency: 1}\nroutes:\n  r: {pool: zz}\n")
+	if code != 1 || strings.Contains(out+errs, "topsecret") || errs == "" {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errs)
+	}
+}
+
+func TestCheckerEndpointErrors(t *testing.T) {
+	code, _, errs := check(t, "pools:\n  p: {upstream_url: 'http://x', max_concurrency: 1}\nroutes:\n  r: {endpoints: {anthropic: {pools: [p]}}}\n")
+	if code != 1 || !strings.Contains(errs, "protocol") {
+		t.Fatalf("code=%d err=%q", code, errs)
+	}
+}
+
+func TestCheckerUsageAndMissingFile(t *testing.T) {
+	var o, e bytes.Buffer
+	if run(nil, &o, &e) != 2 {
+		t.Fatal("want usage exit 2")
+	}
+	if run([]string{"-f", "/nonexistent.yaml"}, &o, &e) != 1 {
+		t.Fatal("want exit 1 for missing file")
+	}
+}

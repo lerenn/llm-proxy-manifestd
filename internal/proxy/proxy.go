@@ -100,12 +100,41 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 }
 
 func writeError(w http.ResponseWriter, code int, typ, errCode, msg string) {
-	writeJSON(w, code, map[string]any{"error": map[string]any{
-		"message": msg,
-		"type":    typ,
-		"param":   nil,
-		"code":    errCode,
-	}})
+	writeProtoError(w, config.ProtocolOpenAI, code, typ, errCode, msg)
+}
+
+// writeProtoError writes an error in the error shape of the given protocol:
+// OpenAI {"error":{message,type,param,code}} or Anthropic
+// {"type":"error","error":{type,message}}.
+func writeProtoError(w http.ResponseWriter, proto string, code int, typ, errCode, msg string) {
+	if proto != config.ProtocolAnthropic {
+		writeJSON(w, code, map[string]any{"error": map[string]any{
+			"message": msg,
+			"type":    typ,
+			"param":   nil,
+			"code":    errCode,
+		}})
+		return
+	}
+	at := "api_error"
+	switch code {
+	case http.StatusBadRequest:
+		at = "invalid_request_error"
+	case http.StatusNotFound:
+		at = "not_found_error"
+	case http.StatusServiceUnavailable:
+		at = "overloaded_error"
+	}
+	writeJSON(w, code, map[string]any{"type": "error", "error": map[string]any{"type": at, "message": msg}})
+}
+
+// protocolOf returns the API a request path belongs to: /v1/messages and
+// below are Anthropic, everything else OpenAI.
+func protocolOf(path string) string {
+	if path == "/v1/messages" || strings.HasPrefix(path, "/v1/messages/") {
+		return config.ProtocolAnthropic
+	}
+	return config.ProtocolOpenAI
 }
 
 func (h *Handler) healthz(w http.ResponseWriter, _ *http.Request) {
@@ -129,65 +158,89 @@ func (h *Handler) status(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"pools": out})
 }
 
-func (h *Handler) models(w http.ResponseWriter, _ *http.Request) {
+// models lists the routes that have an endpoint for the caller's protocol.
+// A request carrying an anthropic-version header (or an x-api-key without
+// Authorization) gets the Anthropic list shape, anything else the OpenAI one.
+func (h *Handler) models(w http.ResponseWriter, r *http.Request) {
+	proto := config.ProtocolOpenAI
+	if r.Header.Get("anthropic-version") != "" || (r.Header.Get("X-Api-Key") != "" && r.Header.Get("Authorization") == "") {
+		proto = config.ProtocolAnthropic
+	}
 	st := h.state()
 	if st == nil {
-		writeError(w, http.StatusServiceUnavailable, "server_error", "not_ready", "configuration not loaded")
+		writeProtoError(w, proto, http.StatusServiceUnavailable, "server_error", "not_ready", "configuration not loaded")
 		return
 	}
-	data := make([]map[string]any, 0, len(st.Config.Routes))
+	data := []map[string]any{}
 	for _, name := range st.Config.RouteNames() {
-		data = append(data, map[string]any{
-			"id":       name,
-			"object":   "model",
-			"created":  0,
-			"owned_by": "llm-proxy-manifestd",
-		})
+		if _, ok := st.Config.Routes[name].Endpoint(proto); !ok {
+			continue
+		}
+		if proto == config.ProtocolAnthropic {
+			data = append(data, map[string]any{"type": "model", "id": name, "display_name": name, "created_at": "1970-01-01T00:00:00Z"})
+			continue
+		}
+		data = append(data, map[string]any{"id": name, "object": "model", "created": 0, "owned_by": "llm-proxy-manifestd"})
+	}
+	if proto == config.ProtocolAnthropic {
+		resp := map[string]any{"data": data, "has_more": false, "first_id": nil, "last_id": nil}
+		if len(data) > 0 {
+			resp["first_id"], resp["last_id"] = data[0]["id"], data[len(data)-1]["id"]
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
 }
 
 func (h *Handler) proxy(w http.ResponseWriter, r *http.Request) {
 	st := h.state() // single snapshot for the whole request
+	proto := protocolOf(r.URL.Path)
 	if st == nil {
-		writeError(w, http.StatusServiceUnavailable, "server_error", "not_ready", "configuration not loaded")
+		writeProtoError(w, proto, http.StatusServiceUnavailable, "server_error", "not_ready", "configuration not loaded")
 		return
 	}
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request_error", "invalid_body", "could not read request body: "+err.Error())
+		writeProtoError(w, proto, http.StatusBadRequest, "invalid_request_error", "invalid_body", "could not read request body: "+err.Error())
 		return
 	}
 	var obj map[string]json.RawMessage
 	if len(bytes.TrimSpace(body)) == 0 || json.Unmarshal(body, &obj) != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request_error", "invalid_json", "request body must be a JSON object")
+		writeProtoError(w, proto, http.StatusBadRequest, "invalid_request_error", "invalid_json", "request body must be a JSON object")
 		return
 	}
 	var model string
 	if raw, ok := obj["model"]; !ok || json.Unmarshal(raw, &model) != nil || model == "" {
-		writeError(w, http.StatusBadRequest, "invalid_request_error", "missing_model", "the 'model' field is required and must be a string")
+		writeProtoError(w, proto, http.StatusBadRequest, "invalid_request_error", "missing_model", "the 'model' field is required and must be a string")
 		return
 	}
 	route, ok := st.Config.Routes[model]
 	if !ok {
-		writeError(w, http.StatusNotFound, "invalid_request_error", "model_not_found", "the model '"+model+"' does not exist")
+		writeProtoError(w, proto, http.StatusNotFound, "invalid_request_error", "model_not_found", "the model '"+model+"' does not exist")
 		return
 	}
-	if route.TargetModel != "" && route.TargetModel != model {
-		tm, _ := json.Marshal(route.TargetModel)
+	ep, ok := route.Endpoint(proto)
+	if !ok {
+		writeProtoError(w, proto, http.StatusNotFound, "invalid_request_error", "endpoint_not_configured",
+			"the model '"+model+"' has no "+proto+" endpoint")
+		return
+	}
+	if ep.TargetModel != "" && ep.TargetModel != model {
+		tm, _ := json.Marshal(ep.TargetModel)
 		obj["model"] = tm
 		if body, err = json.Marshal(obj); err != nil {
-			writeError(w, http.StatusInternalServerError, "server_error", "rewrite_failed", err.Error())
+			writeProtoError(w, proto, http.StatusInternalServerError, "server_error", "rewrite_failed", err.Error())
 			return
 		}
 	}
 
-	priority := route.Priority
+	priority := ep.Priority
 	if v := r.Header.Get("X-Priority"); v != "" {
 		p, err := strconv.Atoi(strings.TrimSpace(v))
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_request_error", "invalid_priority", "X-Priority must be an integer")
+			writeProtoError(w, proto, http.StatusBadRequest, "invalid_request_error", "invalid_priority", "X-Priority must be an integer")
 			return
 		}
 		priority = p
@@ -196,7 +249,7 @@ func (h *Handler) proxy(w http.ResponseWriter, r *http.Request) {
 	rc := h.counters(model)
 	rc.requests.Add(1)
 
-	rt := &failoverTransport{h: h, st: st, route: route, priority: priority, body: body, rc: rc}
+	rt := &failoverTransport{h: h, st: st, ep: ep, proto: proto, priority: priority, body: body, rc: rc}
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.Header.Del("X-Priority")
@@ -210,18 +263,18 @@ func (h *Handler) proxy(w http.ResponseWriter, r *http.Request) {
 				rc.errors.Add(1)
 				w.Header().Set("X-Pool-Name", qt.pool)
 				w.Header().Set("Retry-After", "5")
-				writeError(w, http.StatusServiceUnavailable, "server_error", "queue_timeout",
+				writeProtoError(w, proto, http.StatusServiceUnavailable, "server_error", "queue_timeout",
 					"timed out waiting for a free slot in pool '"+qt.pool+"'")
 				return
 			}
 			var ae *acquireError
 			if errors.As(err, &ae) {
-				writeError(w, http.StatusInternalServerError, "server_error", "acquire_failed", ae.Error())
+				writeProtoError(w, proto, http.StatusInternalServerError, "server_error", "acquire_failed", ae.Error())
 				return
 			}
 			rc.errors.Add(1)
 			h.logger.Error("upstream error", "error", err)
-			writeError(w, http.StatusBadGateway, "server_error", "upstream_error", "upstream request failed")
+			writeProtoError(w, proto, http.StatusBadGateway, "server_error", "upstream_error", "upstream request failed")
 		},
 		FlushInterval: -1, // flush every write: no SSE buffering
 		Transport:     rt,
@@ -243,7 +296,8 @@ func (e *acquireError) Error() string { return e.err.Error() }
 type failoverTransport struct {
 	h        *Handler
 	st       *config.RuntimeState
-	route    config.Route
+	ep       config.Endpoint
+	proto    string
 	priority int
 	body     []byte
 	rc       *routeCounters
@@ -258,12 +312,12 @@ func (t *failoverTransport) acquire(ctx context.Context, remaining []int) (idx i
 	type cand struct{ idx, active, load int }
 	cands := make([]cand, 0, len(remaining))
 	for _, i := range remaining {
-		s := t.st.Pools[t.route.Pools[i]].Stats()
+		s := t.st.Pools[t.ep.Pools[i]].Stats()
 		cands = append(cands, cand{i, s.Active, s.Active + s.QueueDepth})
 	}
 	sort.SliceStable(cands, func(a, b int) bool { return cands[a].active < cands[b].active })
 	for _, c := range cands {
-		if rel, ok := t.st.Pools[t.route.Pools[c.idx]].TryAcquire(); ok {
+		if rel, ok := t.st.Pools[t.ep.Pools[c.idx]].TryAcquire(); ok {
 			return c.idx, rel, time.Since(start), nil
 		}
 	}
@@ -273,7 +327,7 @@ func (t *failoverTransport) acquire(ctx context.Context, remaining []int) (idx i
 			best = c
 		}
 	}
-	name := t.route.Pools[best.idx]
+	name := t.ep.Pools[best.idx]
 	t.rc.queued.Add(1)
 	qctx, cancel := context.WithTimeout(ctx, t.st.Config.Server.QueueTimeout.Std())
 	rel, aerr := t.st.Pools[name].Acquire(qctx, t.priority)
@@ -292,7 +346,7 @@ func (t *failoverTransport) acquire(ctx context.Context, remaining []int) (idx i
 }
 
 func (t *failoverTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	remaining := make([]int, len(t.route.Pools))
+	remaining := make([]int, len(t.ep.Pools))
 	for i := range remaining {
 		remaining[i] = i
 	}
@@ -301,7 +355,7 @@ func (t *failoverTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		if err != nil {
 			return nil, err
 		}
-		name := t.route.Pools[idx]
+		name := t.ep.Pools[idx]
 		pc := t.st.Config.Pools[name]
 		for k, v := range remaining {
 			if v == idx {
@@ -317,7 +371,15 @@ func (t *failoverTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		out.URL.RawPath = ""
 		out.Host = pc.Parsed.Host
 		out.Header.Del("Authorization")
-		if pc.APIKey != "" {
+		if t.proto == config.ProtocolAnthropic {
+			// Anthropic upstreams authenticate with x-api-key; the client's
+			// credentials are never forwarded. anthropic-version and
+			// anthropic-beta pass through untouched.
+			out.Header.Del("X-Api-Key")
+			if pc.APIKey != "" {
+				out.Header.Set("X-Api-Key", pc.APIKey)
+			}
+		} else if pc.APIKey != "" {
 			out.Header.Del("X-Api-Key")
 			out.Header.Set("Authorization", "Bearer "+pc.APIKey)
 		}

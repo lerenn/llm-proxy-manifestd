@@ -67,12 +67,16 @@
 
     fill($('pools'), s.pools.map(function (p) {
       var q = p.queue_by_priority.map(function (x) { return 'p' + x.priority + ': ' + x.count; }).join(', ') || '–';
-      return [[p.name], [p.upstream], [p.active_slots + ' / ' + p.max_concurrency, 'num'],
+      return [[p.name + (p.protocol ? ' (' + p.protocol + ')' : '')], [p.upstream], [p.active_slots + ' / ' + p.max_concurrency, 'num'],
         [n(p.queued), 'num'], [q], [n(p.total_served), 'num']];
     }), 6);
     fill($('routes'), s.routes.map(function (x) {
-      var name = x.name + (x.target_model ? ' → ' + x.target_model : '');
-      return [[name], [(x.pools || [x.pool]).join(', ')], [(x.upstreams || [x.upstream]).join(', ')], [x.priority, 'num'], [n(x.in_flight), 'num'],
+      var eps = x.endpoints || [{protocol: 'openai', pools: x.pools || [x.pool], upstreams: x.upstreams || [x.upstream], target_model: x.target_model, priority: x.priority}];
+      var name = x.name + ' [' + eps.map(function (e) { return e.protocol; }).join(', ') + ']';
+      var pls = eps.map(function (e) { return e.protocol + ': ' + e.pools.join(', ') + (e.target_model ? ' → ' + e.target_model : ''); }).join(' | ');
+      var ups = eps.map(function (e) { return e.protocol + ': ' + e.upstreams.join(', '); }).join(' | ');
+      var prio = eps.map(function (e) { return e.priority; }).join(' / ');
+      return [[name], [pls], [ups], [prio, 'num'], [n(x.in_flight), 'num'],
         [n(x.queued), 'num'], [n(x.requests), 'num'], [n(x.errors), 'num' + (x.errors ? ' err' : '')]];
     }), 8);
     $('updated').textContent = 'updated ' + now.toLocaleTimeString();

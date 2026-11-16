@@ -26,6 +26,7 @@ export default defineConfig({
           { text: 'Architecture', link: '/guide/architecture' },
           { text: 'Priority Queues', link: '/guide/priority-queues' },
           { text: 'Multi-pool routing', link: '/guide/multi-pool-routing' },
+          { text: 'Protocol endpoints & checker', link: '/guide/protocol-endpoints' },
           { text: 'Releasing', link: '/guide/releasing' },
         ],
       },

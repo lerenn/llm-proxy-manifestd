@@ -204,13 +204,13 @@ func TestRoutePoolsValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := c.Routes["s"].Pools; len(got) != 1 || got[0] != "a" {
+	if got := c.Routes["s"].Endpoints["openai"].Pools; len(got) != 1 || got[0] != "a" {
 		t.Fatalf("single pool not normalised: %v", got)
 	}
-	if got := c.Routes["m"].Pools; len(got) != 2 || got[0] != "b" || got[1] != "a" {
+	if got := c.Routes["m"].Endpoints["openai"].Pools; len(got) != 2 || got[0] != "b" || got[1] != "a" {
 		t.Fatalf("order lost: %v", got)
 	}
-	if c.Routes["m"].TargetModel != "claude-sonnet-5-5@medium" {
+	if c.Routes["m"].Endpoints["openai"].TargetModel != "claude-sonnet-5-5@medium" {
 		t.Fatal("target_model altered")
 	}
 }
@@ -228,11 +228,74 @@ func TestReloadRoutePools(t *testing.T) {
 		t.Fatal(err)
 	}
 	second := l.State()
-	if len(second.Config.Routes["r"].Pools) != 2 || second.Pools["a"] != first.Pools["a"] {
+	if len(second.Config.Routes["r"].Endpoints["openai"].Pools) != 2 || second.Pools["a"] != first.Pools["a"] {
 		t.Fatal("route pools not reloaded or pool instance not preserved")
 	}
 	write(t, path, twoPools+"routes:\n  r: {pools: [a, nope]}\n")
 	if err := l.Reload(); err == nil || l.State() != second {
 		t.Fatal("invalid route must be rejected and previous state kept")
+	}
+}
+
+const protoPools = `pools:
+  ca: {upstream_url: 'http://x', protocol: anthropic, max_concurrency: 1}
+  cb: {upstream_url: 'http://x2', protocol: anthropic, max_concurrency: 1}
+  oa: {upstream_url: 'http://y', max_concurrency: 1}
+`
+
+func TestEndpointsValidation(t *testing.T) {
+	bad := map[string]string{
+		"mixed":          "routes:\n  r: {pools: [oa], endpoints: {openai: {pools: [oa]}}}\n",
+		"mixed prio":     "routes:\n  r: {priority: 3, endpoints: {openai: {pools: [oa]}}}\n",
+		"empty map":      "routes:\n  r: {endpoints: {}}\n",
+		"unknown proto":  "routes:\n  r: {endpoints: {gemini: {pools: [oa]}}}\n",
+		"empty pools":    "routes:\n  r: {endpoints: {openai: {pools: []}}}\n",
+		"no pools":       "routes:\n  r: {endpoints: {openai: {priority: 1}}}\n",
+		"unknown pool":   "routes:\n  r: {endpoints: {openai: {pools: [zzz]}}}\n",
+		"duplicate":      "routes:\n  r: {endpoints: {anthropic: {pools: [ca, cb, ca]}}}\n",
+		"proto mismatch": "routes:\n  r: {endpoints: {anthropic: {pools: [oa]}}}\n",
+		"mismatch 2":     "routes:\n  r: {endpoints: {openai: {pools: [oa, ca]}}}\n",
+		"shorthand anth": "routes:\n  r: {pools: [ca]}\n",
+		"unknown key":    "routes:\n  r: {endpoints: {openai: {pools: [oa], poolz: [x]}}}\n",
+		"bad pool proto": "pools:\n  p: {upstream_url: 'http://x', protocol: gemini, max_concurrency: 1}\n",
+	}
+	for name, r := range bad {
+		in := protoPools + r
+		if name == "bad pool proto" {
+			in = r
+		}
+		if _, err := Parse([]byte(in)); err == nil {
+			t.Errorf("%s: expected error", name)
+		}
+	}
+	c, err := Parse([]byte(protoPools + `routes:
+  fast:
+    endpoints:
+      anthropic: {pools: [cb, ca], target_model: "haiku@low", priority: 10}
+      openai: {pool: oa, target_model: "luna@low", priority: 5}
+  short: {pool: oa, target_model: m, priority: 7}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := c.Routes["fast"].Endpoint("anthropic")
+	if len(a.Pools) != 2 || a.Pools[0] != "cb" || a.TargetModel != "haiku@low" || a.Priority != 10 {
+		t.Fatalf("anthropic endpoint: %+v", a)
+	}
+	if o, _ := c.Routes["fast"].Endpoint("openai"); len(o.Pools) != 1 || o.Priority != 5 {
+		t.Fatalf("openai endpoint: %+v", o)
+	}
+	if got := c.Routes["short"].EndpointProtocols(); len(got) != 1 || got[0] != "openai" {
+		t.Fatalf("shorthand protocols: %v", got)
+	}
+	if c.Pools["oa"].Protocol != "openai" {
+		t.Fatal("default protocol not openai")
+	}
+}
+
+func TestInvalidURLNotEchoed(t *testing.T) {
+	_, err := Parse([]byte("pools:\n  p: {upstream_url: 'ftp://user:hunter2@x', max_concurrency: 1}\n"))
+	if err == nil || strings.Contains(err.Error(), "hunter2") {
+		t.Fatalf("want error without secret, got %v", err)
 	}
 }
