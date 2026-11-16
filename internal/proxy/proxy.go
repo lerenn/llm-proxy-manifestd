@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -173,10 +174,6 @@ func (h *Handler) proxy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "invalid_request_error", "model_not_found", "the model '"+model+"' does not exist")
 		return
 	}
-	// Route.Pool existence is guaranteed by config validation.
-	poolCfg := st.Config.Pools[route.Pool]
-	pl := st.Pools[route.Pool]
-
 	if route.TargetModel != "" && route.TargetModel != model {
 		tm, _ := json.Marshal(route.TargetModel)
 		obj["model"] = tm
@@ -198,67 +195,192 @@ func (h *Handler) proxy(w http.ResponseWriter, r *http.Request) {
 
 	rc := h.counters(model)
 	rc.requests.Add(1)
-	rc.queued.Add(1)
-	start := time.Now()
-	qctx, cancel := context.WithTimeout(r.Context(), st.Config.Server.QueueTimeout.Std())
-	release, err := pl.Acquire(qctx, priority)
-	cancel()
-	rc.queued.Add(-1)
-	if err != nil {
-		if r.Context().Err() != nil {
-			return // client went away while queued
-		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			rc.errors.Add(1)
-			w.Header().Set("X-Pool-Name", route.Pool)
-			w.Header().Set("Retry-After", "5")
-			writeError(w, http.StatusServiceUnavailable, "server_error", "queue_timeout",
-				"timed out waiting for a free slot in pool '"+route.Pool+"'")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "server_error", "acquire_failed", err.Error())
-		return
-	}
-	// The slot is held for the entire response stream, not just the headers.
-	rc.inflight.Add(1)
-	defer rc.inflight.Add(-1)
-	defer release()
-	wait := time.Since(start)
 
+	rt := &failoverTransport{h: h, st: st, route: route, priority: priority, body: body, rc: rc}
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
-			pr.SetURL(poolCfg.Parsed)
-			pr.Out.Host = poolCfg.Parsed.Host
 			pr.Out.Header.Del("X-Priority")
-			pr.Out.Header.Del("Authorization")
-			if poolCfg.APIKey != "" {
-				pr.Out.Header.Del("X-Api-Key")
-				pr.Out.Header.Set("Authorization", "Bearer "+poolCfg.APIKey)
-			}
-			pr.Out.Body = io.NopCloser(bytes.NewReader(body))
-			pr.Out.ContentLength = int64(len(body))
-			pr.Out.Header.Set("Content-Length", strconv.Itoa(len(body)))
-			pr.Out.Header.Del("Transfer-Encoding")
-			pr.Out.TransferEncoding = nil
-		},
-		ModifyResponse: func(resp *http.Response) error {
-			resp.Header.Set("X-Queue-Wait-Ms", strconv.FormatInt(wait.Milliseconds(), 10))
-			resp.Header.Set("X-Pool-Name", route.Pool)
-			if resp.StatusCode >= 500 {
-				rc.errors.Add(1)
-			}
-			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			if r.Context().Err() != nil {
+				return // client went away
+			}
+			var qt *queueTimeoutError
+			if errors.As(err, &qt) {
+				rc.errors.Add(1)
+				w.Header().Set("X-Pool-Name", qt.pool)
+				w.Header().Set("Retry-After", "5")
+				writeError(w, http.StatusServiceUnavailable, "server_error", "queue_timeout",
+					"timed out waiting for a free slot in pool '"+qt.pool+"'")
+				return
+			}
+			var ae *acquireError
+			if errors.As(err, &ae) {
+				writeError(w, http.StatusInternalServerError, "server_error", "acquire_failed", ae.Error())
 				return
 			}
 			rc.errors.Add(1)
-			h.logger.Error("upstream error", "pool", route.Pool, "error", err)
+			h.logger.Error("upstream error", "error", err)
 			writeError(w, http.StatusBadGateway, "server_error", "upstream_error", "upstream request failed")
 		},
 		FlushInterval: -1, // flush every write: no SSE buffering
-		Transport:     h.transport,
+		Transport:     rt,
 	}
 	rp.ServeHTTP(w, r)
+}
+
+type queueTimeoutError struct{ pool string }
+
+func (e *queueTimeoutError) Error() string { return "queue timeout in pool " + e.pool }
+
+type acquireError struct{ err error }
+
+func (e *acquireError) Error() string { return e.err.Error() }
+
+// failoverTransport sends a request to the route's pools, trying further
+// pools when an attempt fails before any response was produced. See
+// README "Multi-pool routing" for the exact semantics.
+type failoverTransport struct {
+	h        *Handler
+	st       *config.RuntimeState
+	route    config.Route
+	priority int
+	body     []byte
+	rc       *routeCounters
+}
+
+// acquire picks a pool among remaining (indexes into route.Pools) and takes a
+// slot. Pools with a free slot are tried by ascending in-flight count (ties by
+// route order). If none has a free slot it queues on the pool with the lowest
+// active+queued load (ties by route order).
+func (t *failoverTransport) acquire(ctx context.Context, remaining []int) (idx int, release func(), wait time.Duration, err error) {
+	start := time.Now()
+	type cand struct{ idx, active, load int }
+	cands := make([]cand, 0, len(remaining))
+	for _, i := range remaining {
+		s := t.st.Pools[t.route.Pools[i]].Stats()
+		cands = append(cands, cand{i, s.Active, s.Active + s.QueueDepth})
+	}
+	sort.SliceStable(cands, func(a, b int) bool { return cands[a].active < cands[b].active })
+	for _, c := range cands {
+		if rel, ok := t.st.Pools[t.route.Pools[c.idx]].TryAcquire(); ok {
+			return c.idx, rel, time.Since(start), nil
+		}
+	}
+	best := cands[0]
+	for _, c := range cands {
+		if c.load < best.load || (c.load == best.load && c.idx < best.idx) {
+			best = c
+		}
+	}
+	name := t.route.Pools[best.idx]
+	t.rc.queued.Add(1)
+	qctx, cancel := context.WithTimeout(ctx, t.st.Config.Server.QueueTimeout.Std())
+	rel, aerr := t.st.Pools[name].Acquire(qctx, t.priority)
+	cancel()
+	t.rc.queued.Add(-1)
+	if aerr != nil {
+		if ctx.Err() != nil {
+			return 0, nil, 0, ctx.Err()
+		}
+		if errors.Is(aerr, context.DeadlineExceeded) {
+			return 0, nil, 0, &queueTimeoutError{pool: name}
+		}
+		return 0, nil, 0, &acquireError{aerr}
+	}
+	return best.idx, rel, time.Since(start), nil
+}
+
+func (t *failoverTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	remaining := make([]int, len(t.route.Pools))
+	for i := range remaining {
+		remaining[i] = i
+	}
+	for {
+		idx, release, wait, err := t.acquire(req.Context(), remaining)
+		if err != nil {
+			return nil, err
+		}
+		name := t.route.Pools[idx]
+		pc := t.st.Config.Pools[name]
+		for k, v := range remaining {
+			if v == idx {
+				remaining = append(remaining[:k:k], remaining[k+1:]...)
+				break
+			}
+		}
+		last := len(remaining) == 0
+
+		out := req.Clone(req.Context())
+		out.URL.Scheme, out.URL.Host = pc.Parsed.Scheme, pc.Parsed.Host
+		out.URL.Path = joinPath(pc.Parsed.Path, req.URL.Path)
+		out.URL.RawPath = ""
+		out.Host = pc.Parsed.Host
+		out.Header.Del("Authorization")
+		if pc.APIKey != "" {
+			out.Header.Del("X-Api-Key")
+			out.Header.Set("Authorization", "Bearer "+pc.APIKey)
+		}
+		out.Body = io.NopCloser(bytes.NewReader(t.body))
+		out.ContentLength = int64(len(t.body))
+		out.Header.Set("Content-Length", strconv.Itoa(len(t.body)))
+		out.Header.Del("Transfer-Encoding")
+		out.TransferEncoding = nil
+
+		resp, err := t.h.transport.RoundTrip(out)
+		if err == nil && resp.StatusCode >= 500 && !last {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+			resp.Body.Close()
+			err = errors.New("upstream status " + strconv.Itoa(resp.StatusCode))
+			resp = nil
+		}
+		if err != nil {
+			release()
+			if req.Context().Err() != nil {
+				return nil, err
+			}
+			if last {
+				t.h.logger.Error("upstream error", "pool", name, "error", err)
+				return nil, err
+			}
+			t.h.logger.Warn("upstream failed, failing over", "pool", name, "error", err)
+			continue
+		}
+		if resp.StatusCode >= 500 {
+			t.rc.errors.Add(1)
+		}
+		resp.Header.Set("X-Queue-Wait-Ms", strconv.FormatInt(wait.Milliseconds(), 10))
+		resp.Header.Set("X-Pool-Name", name)
+		// The slot is held for the entire response stream, not just the headers.
+		t.rc.inflight.Add(1)
+		var once sync.Once
+		resp.Body = &releaseBody{ReadCloser: resp.Body, done: func() {
+			once.Do(func() { t.rc.inflight.Add(-1); release() })
+		}}
+		return resp, nil
+	}
+}
+
+type releaseBody struct {
+	io.ReadCloser
+	done func()
+}
+
+func (b *releaseBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.done()
+	return err
+}
+
+// joinPath mirrors httputil.ProxyRequest.SetURL path joining.
+func joinPath(base, p string) string {
+	switch {
+	case base == "":
+		return p
+	case strings.HasSuffix(base, "/") && strings.HasPrefix(p, "/"):
+		return base + p[1:]
+	case !strings.HasSuffix(base, "/") && !strings.HasPrefix(p, "/"):
+		return base + "/" + p
+	}
+	return base + p
 }

@@ -114,6 +114,20 @@ func (p *Pool) Acquire(ctx context.Context, priority int) (release func(), err e
 	}
 }
 
+// TryAcquire obtains a slot only if one is free right now and nobody is
+// queued. It never waits; ok is false when no slot was taken.
+func (p *Pool) TryAcquire() (release func(), ok bool) {
+	p.mu.Lock()
+	if p.active < p.max && len(p.queue.items) == 0 {
+		p.active++
+		p.mu.Unlock()
+		p.served.Add(1)
+		return p.releaser(), true
+	}
+	p.mu.Unlock()
+	return nil, false
+}
+
 // Stats returns a snapshot of the pool state.
 func (p *Pool) Stats() Stats {
 	p.mu.Lock()

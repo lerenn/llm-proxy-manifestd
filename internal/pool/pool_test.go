@@ -339,3 +339,18 @@ func TestQueueByPriority(t *testing.T) {
 	}
 	rel()
 }
+
+func TestTryAcquire(t *testing.T) {
+	p := New(1, 0)
+	rel, ok := p.TryAcquire()
+	if !ok {
+		t.Fatal("expected slot")
+	}
+	if _, ok := p.TryAcquire(); ok {
+		t.Fatal("pool is full")
+	}
+	rel()
+	if _, ok := p.TryAcquire(); !ok {
+		t.Fatal("slot should be free again")
+	}
+}

@@ -72,7 +72,7 @@
     }), 6);
     fill($('routes'), s.routes.map(function (x) {
       var name = x.name + (x.target_model ? ' → ' + x.target_model : '');
-      return [[name], [x.pool], [x.upstream], [x.priority, 'num'], [n(x.in_flight), 'num'],
+      return [[name], [(x.pools || [x.pool]).join(', ')], [(x.upstreams || [x.upstream]).join(', ')], [x.priority, 'num'], [n(x.in_flight), 'num'],
         [n(x.queued), 'num'], [n(x.requests), 'num'], [n(x.errors), 'num' + (x.errors ? ' err' : '')]];
     }), 8);
     $('updated').textContent = 'updated ' + now.toLocaleTimeString();

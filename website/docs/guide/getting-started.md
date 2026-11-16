@@ -54,7 +54,7 @@ curl http://llm-proxy/v1/chat/completions \
   -d '{"model":"codex-interactive","messages":[{"role":"user","content":"hi"}],"stream":true}'
 ```
 
-The proxy rewrites `model` to the route's `target_model`, takes a slot from the route's pool, injects
+The proxy rewrites `model` to the route's `target_model`, takes a slot from one of the route's pools ([multi-pool routing](./multi-pool-routing)), injects
 the pool's API key and streams the response back. `/v1/chat/completions`, `/v1/responses` and
 `/v1/messages` all work: every `/v1/*` request carrying a JSON `model` is routed.
 

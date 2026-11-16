@@ -72,15 +72,18 @@ type dashboardPool struct {
 }
 
 type dashboardRoute struct {
-	Name     string `json:"name"`
-	Pool     string `json:"pool"`
-	Upstream string `json:"upstream"`
-	Target   string `json:"target_model,omitempty"`
-	Priority int    `json:"priority"`
-	InFlight int64  `json:"in_flight"`
-	Queued   int64  `json:"queued"`
-	Requests int64  `json:"requests"`
-	Errors   int64  `json:"errors"`
+	Name string `json:"name"`
+	// Pool and Upstream describe the first pool, kept for compatibility.
+	Pool      string   `json:"pool"`
+	Upstream  string   `json:"upstream"`
+	Pools     []string `json:"pools"`
+	Upstreams []string `json:"upstreams"`
+	Target    string   `json:"target_model,omitempty"`
+	Priority  int      `json:"priority"`
+	InFlight  int64    `json:"in_flight"`
+	Queued    int64    `json:"queued"`
+	Requests  int64    `json:"requests"`
+	Errors    int64    `json:"errors"`
 }
 
 func (h *Handler) dashboardSnapshot() (dashboardState, bool) {
@@ -139,8 +142,13 @@ func (h *Handler) dashboardSnapshot() (dashboardState, bool) {
 	for _, n := range st.Config.RouteNames() {
 		r := st.Config.Routes[n]
 		rc := h.counters(n)
+		ups := make([]string, len(r.Pools))
+		for i, pn := range r.Pools {
+			ups[i] = upstream[pn]
+		}
 		dr := dashboardRoute{
-			Name: n, Pool: r.Pool, Upstream: upstream[r.Pool], Target: r.TargetModel, Priority: r.Priority,
+			Name: n, Pool: r.Pools[0], Upstream: ups[0], Pools: r.Pools, Upstreams: ups,
+			Target: r.TargetModel, Priority: r.Priority,
 			InFlight: rc.inflight.Load(), Queued: rc.queued.Load(),
 			Requests: rc.requests.Load(), Errors: rc.errors.Load(),
 		}
