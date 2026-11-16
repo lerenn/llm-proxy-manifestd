@@ -34,7 +34,7 @@ dashboard:
       <div class="hpo-col">
         <h3 class="hpo-title">Resulting pod</h3>
         <div class="hpo-diagram" role="img"
-          aria-label="Clients call the proxy container on port 8080. The proxy forwards to the claude sidecar on localhost (a codex sidecar is planned), which calls the vendor API.">
+          aria-label="Clients call the proxy container on port 8080. The proxy calls vendor APIs directly (API passthrough) or through CLI sidecars on localhost for subscription logins.">
           <div class="hpo-row hpo-ext">Clients (coding agents)</div>
           <div class="hpo-arrow">&darr; <small>:8080</small></div>
           <div class="hpo-pod">
