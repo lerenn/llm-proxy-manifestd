@@ -136,6 +136,20 @@ opencode service restart                     # opencode caches its config in a b
 | `--anthropic-provider`, `--openai-provider` | Provider ids (default `anyshiftlab-anthropic-proxy`, `anyshiftlab-openai-proxy`). |
 | `--no-anthropic`, `--no-openai` | Skip one provider. |
 | `--set-key` | Also write the key as the providers' `apiKey` (never printed). |
+| `--raw-names` | Write the raw endpoint id as the model `name` instead of a readable one. |
 | `--write` | Apply. Atomic write, `<config>.bak` saved first if absent, file mode kept (`0600` for a new file). |
+
+### Model names
+
+The map key is the raw endpoint id (what the proxy needs as `model`). The `name` shown by opencode, and by tools that list its models such as Paseo's model picker, is generated from it: the first `-` segment capitalised, the other segments in parentheses.
+
+| Endpoint id | Name |
+| :- | :- |
+| `fast` | `Fast` |
+| `standard-low` | `Standard (Low)` |
+| `premium-high` | `Premium (High)` |
+| `my-big-fast` | `My (Big Fast)` |
+
+For a model already in the file, the name is updated only when it is missing, empty, equal to the raw id or equal to the generated name; a name you customised is kept, and every other field of the entry (`limit`, `options`, `variants`...) is always preserved. Renamed models are listed with `~` (`~ provider/fast: "fast" -> "Fast"`) and counted in the summary (`+added -removed =unchanged ~renamed`). With `--raw-names` the raw id is written instead (and a generated name is switched back to it). lpmctl does not refresh Paseo: restart the opencode service (and Paseo's opencode sessions) to see new names.
 
 Only the `models` map of the two named providers is replaced: models you added by hand to them are removed, models removed from the proxy disappear, the settings of models that stay are kept. Every other key and provider is preserved (formatting is normalised to 2-space JSON). A missing provider block is created (`npm`, `name`, `options.baseURL`). Both the `provider` and the `providers` config styles are detected; a new file uses `provider`. If the file has comments or trailing commas it is not edited: nothing is written and the models are printed for you to paste. A 401/403 from the proxy is reported as a rejected key. Re-run it when the proxy's endpoints change.

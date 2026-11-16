@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Default opencode provider ids and display names.
@@ -34,6 +36,7 @@ type OpenCodeOptions struct {
 	SetKey            bool // also write the apiKey option
 	NoAnthropic       bool
 	NoOpenAI          bool
+	RawNames          bool // write the raw endpoint id as model name
 	HTTP              *http.Client
 	Stdout, Stderr    io.Writer
 }
@@ -250,11 +253,71 @@ type providerSpec struct {
 type ProviderChange struct {
 	Provider             string
 	Added, Removed, Same []string
+	Renamed              []Rename
 	Created              bool
 }
 
+// Rename is a kept model whose display name was updated.
+type Rename struct{ ID, From, To string }
+
+func capitalize(s string) string {
+	r, n := utf8.DecodeRuneInString(s)
+	if n == 0 {
+		return s
+	}
+	return string(unicode.ToUpper(r)) + s[n:]
+}
+
+// DisplayName builds a readable model name from an endpoint id: the first
+// "-" segment capitalised, the others joined by spaces in parentheses
+// ("standard-low" -> "Standard (Low)"). Empty segments are ignored; an id
+// without any segment is returned unchanged.
+func DisplayName(id string) string {
+	var segs []string
+	for _, p := range strings.Split(id, "-") {
+		if p != "" {
+			segs = append(segs, capitalize(p))
+		}
+	}
+	switch len(segs) {
+	case 0:
+		return id
+	case 1:
+		return segs[0]
+	}
+	return segs[0] + " (" + strings.Join(segs[1:], " ") + ")"
+}
+
+func modelName(id string, raw bool) string {
+	if raw {
+		return id
+	}
+	return DisplayName(id)
+}
+
+// renameEntry returns the entry with its name updated when the current name is
+// missing, empty, the raw id or a generated name; other fields stay untouched.
+func renameEntry(v json.RawMessage, id string, raw bool) (json.RawMessage, *Rename) {
+	e, err := parseObj(v)
+	if err != nil {
+		return v, nil
+	}
+	want := modelName(id, raw)
+	cur := ""
+	if nr, ok := e.vals["name"]; ok {
+		if err := json.Unmarshal(nr, &cur); err != nil {
+			return v, nil // not a string: leave it
+		}
+	}
+	if cur == want || (cur != "" && cur != id && cur != DisplayName(id)) {
+		return v, nil
+	}
+	e.set("name", jstr(want))
+	return e.raw(), &Rename{ID: id, From: cur, To: want}
+}
+
 // mergeConfig returns the new file content and the per-provider changes.
-func mergeConfig(existing []byte, st *style, specs []providerSpec, baseURL, key string, setKey bool) ([]byte, []ProviderChange, error) {
+func mergeConfig(existing []byte, st *style, specs []providerSpec, baseURL, key string, setKey, rawNames bool) ([]byte, []ProviderChange, error) {
 	root := newObj()
 	if len(bytes.TrimSpace(existing)) > 0 {
 		var err error
@@ -315,10 +378,15 @@ func mergeConfig(existing []byte, st *style, specs []providerSpec, baseURL, key 
 			}
 			want[id] = true
 			if v, ok := old.vals[id]; ok { // keep a kept model's own settings
-				nm.set(id, v)
-				ch.Same = append(ch.Same, id)
+				nv, rn := renameEntry(v, id, rawNames)
+				nm.set(id, nv)
+				if rn != nil {
+					ch.Renamed = append(ch.Renamed, *rn)
+				} else {
+					ch.Same = append(ch.Same, id)
+				}
 			} else {
-				nm.set(id, json.RawMessage(`{"name":`+string(jstr(id))+`}`))
+				nm.set(id, json.RawMessage(`{"name":`+string(jstr(modelName(id, rawNames)))+`}`))
 				ch.Added = append(ch.Added, id)
 			}
 		}
@@ -376,7 +444,7 @@ func OpenCode(ctx context.Context, o OpenCodeOptions) error {
 		for _, sp := range specs {
 			m := newObj()
 			for _, id := range sp.ids {
-				m.set(id, json.RawMessage(`{"name":`+string(jstr(id))+`}`))
+				m.set(id, json.RawMessage(`{"name":`+string(jstr(modelName(id, o.RawNames)))+`}`))
 			}
 			var ind bytes.Buffer
 			_ = json.Indent(&ind, m.raw(), "", "  ")
@@ -384,7 +452,7 @@ func OpenCode(ctx context.Context, o OpenCodeOptions) error {
 		}
 		return b.String()
 	}
-	out, changes, err := mergeConfig(existing, nil, specs, o.URL, o.Key, o.SetKey)
+	out, changes, err := mergeConfig(existing, nil, specs, o.URL, o.Key, o.SetKey, o.RawNames)
 	if err != nil {
 		fmt.Fprintf(o.Stderr, "lpmctl: %s is not plain JSON that can be edited safely (comments, trailing commas or another problem: %v).\n"+
 			"Nothing was written. Set these `models` maps by hand:\n\n%s", o.ConfigPath, err, snippet())
@@ -399,12 +467,15 @@ func OpenCode(ctx context.Context, o OpenCodeOptions) error {
 		if !o.Write {
 			verb = "would " + verb
 		}
-		fmt.Fprintf(o.Stdout, "%s %s: +%d -%d =%d\n", verb, c.Provider, len(c.Added), len(c.Removed), len(c.Same))
+		fmt.Fprintf(o.Stdout, "%s %s: +%d -%d =%d ~%d\n", verb, c.Provider, len(c.Added), len(c.Removed), len(c.Same), len(c.Renamed))
 		for _, id := range c.Added {
 			fmt.Fprintf(o.Stdout, "  + %s/%s\n", c.Provider, id)
 		}
 		for _, id := range c.Removed {
 			fmt.Fprintf(o.Stdout, "  - %s/%s\n", c.Provider, id)
+		}
+		for _, r := range c.Renamed {
+			fmt.Fprintf(o.Stdout, "  ~ %s/%s: %q -> %q\n", c.Provider, r.ID, r.From, r.To)
 		}
 		for _, id := range c.Same {
 			fmt.Fprintf(o.Stdout, "    %s/%s\n", c.Provider, id)

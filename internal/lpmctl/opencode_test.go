@@ -228,3 +228,98 @@ func TestOpenCodeNoURL(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestDisplayName(t *testing.T) {
+	for in, want := range map[string]string{
+		"fast":            "Fast",
+		"standard-low":    "Standard (Low)",
+		"premium-high":    "Premium (High)",
+		"frontier-high":   "Frontier (High)",
+		"my-big-fast":     "My (Big Fast)",
+		"gPT-4o-Mini":     "GPT (4o Mini)",
+		"gpt-5":           "Gpt (5)",
+		"a--b-":           "A (B)",
+		"-lead":           "Lead",
+		"-":               "-",
+		"":                "",
+		"été-rapide":      "Été (Rapide)",
+		"codex@high.v2-x": "Codex@high.v2 (X)",
+	} {
+		if got := DisplayName(in); got != want {
+			t.Errorf("DisplayName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestOpenCodeRenameRules(t *testing.T) {
+	srv := fakeProxy(t)
+	defer srv.Close()
+	cfg := `{"provider":{"anyshiftlab-openai-proxy":{"models":{
+	  "fast":{"name":"fast","limit":{"context":5}},
+	  "codex":{"name":"My Codex","limit":{"context":7}}}},
+	  "anyshiftlab-anthropic-proxy":{"models":{"fast":{"name":"Fast"},"premium":{}}}}}`
+	p := filepath.Join(t.TempDir(), "c.json")
+	os.WriteFile(p, []byte(cfg), 0o600)
+	o := OpenCodeOptions{URL: srv.URL + "/v1", Key: testKey, ConfigPath: p}
+	out, _, err := runOC(t, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []string{`~ anyshiftlab-openai-proxy/fast: "fast" -> "Fast"`, `~ anyshiftlab-anthropic-proxy/premium: "" -> "Premium"`, "~1"} {
+		if !strings.Contains(out, w) {
+			t.Errorf("lacks %q:\n%s", w, out)
+		}
+	}
+	if strings.Contains(out, "My Codex") {
+		t.Error("custom name reported as renamed")
+	}
+	o.Write = true
+	if _, _, err := runOC(t, o); err != nil {
+		t.Fatal(err)
+	}
+	m := readJSON(t, p)
+	om := models(m, "provider", DefaultOpenAIProvider)
+	if om["fast"].(map[string]any)["name"] != "Fast" || om["fast"].(map[string]any)["limit"] == nil {
+		t.Fatalf("%v", om["fast"])
+	}
+	if om["codex"].(map[string]any)["name"] != "My Codex" || om["codex"].(map[string]any)["limit"] == nil {
+		t.Fatalf("custom name touched: %v", om["codex"])
+	}
+	if models(m, "provider", DefaultAnthropicProvider)["premium"].(map[string]any)["name"] != "Premium" {
+		t.Fatal("missing name not filled")
+	}
+	// idempotent
+	out, _, _ = runOC(t, o)
+	if !strings.Contains(out, "already up to date") {
+		t.Fatal(out)
+	}
+}
+
+func TestOpenCodeRawNames(t *testing.T) {
+	srv := fakeProxy(t)
+	defer srv.Close()
+	p := filepath.Join(t.TempDir(), "c.json")
+	o := OpenCodeOptions{URL: srv.URL + "/v1", Key: testKey, ConfigPath: p, Write: true, RawNames: true}
+	if _, _, err := runOC(t, o); err != nil {
+		t.Fatal(err)
+	}
+	if n := models(readJSON(t, p), "provider", DefaultOpenAIProvider)["fast"].(map[string]any)["name"]; n != "fast" {
+		t.Fatalf("raw name %v", n)
+	}
+	// switching back to readable names renames generated/raw ones
+	o.RawNames = false
+	if _, _, err := runOC(t, o); err != nil {
+		t.Fatal(err)
+	}
+	if n := models(readJSON(t, p), "provider", DefaultOpenAIProvider)["fast"].(map[string]any)["name"]; n != "Fast" {
+		t.Fatalf("name %v", n)
+	}
+	// and raw again from the generated name
+	o.RawNames = true
+	if _, _, err := runOC(t, o); err != nil {
+		t.Fatal(err)
+	}
+	if n := models(readJSON(t, p), "provider", DefaultOpenAIProvider)["fast"].(map[string]any)["name"]; n != "fast" {
+		t.Fatalf("name %v", n)
+	}
+}

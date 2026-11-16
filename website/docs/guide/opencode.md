@@ -26,6 +26,8 @@ lpmctl opencode --client opencode            # dry run: shows what would change
 lpmctl opencode --client opencode --write    # apply, then: opencode service restart
 ```
 
+The generated model `name` is a readable form of the endpoint id (`standard-low` becomes `Standard (Low)`), which is what pickers such as Paseo's show; the model id stays the raw endpoint name (`<provider>/standard-low`). Names you customised are never overwritten, and `--raw-names` keeps the raw id as name. See [model names](./lpmctl#model-names).
+
 Re-run it whenever the endpoints of the proxy change. Without a `models` map opencode fails with `Model unavailable: <provider>/<model>`.
 
 ## Claude subscription (Anthropic endpoints)

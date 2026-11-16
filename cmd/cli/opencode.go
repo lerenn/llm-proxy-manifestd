@@ -23,10 +23,14 @@ func newOpenCodeCmd(g *globals) *cobra.Command {
 			"Default is a dry run; --write applies it (atomic, <config>.bak saved first, file mode\n" +
 			"kept). Only the `models` of the two named providers are replaced: models added by hand\n" +
 			"to them are removed, models removed from the proxy disappear; settings of models that\n" +
-			"stay are kept. Everything else in the file is preserved. A provider block is created\n" +
+			"stay are kept (see below for names). Everything else in the file is preserved. A provider block is created\n" +
 			"if missing. The config must be plain JSON (comments/trailing commas: nothing is\n" +
 			"written, the snippet is printed). Both `provider` and `providers` config styles are\n" +
 			"detected; `provider` is used for a new file.\n\n" +
+			"Model names: the map key is the raw endpoint id; the displayed `name` is generated from it\n" +
+			"(fast -> Fast, standard-low -> Standard (Low)). For a model already in the file the name is\n" +
+			"updated only if missing, empty, the raw id or the generated name; a name you customised\n" +
+			"is kept, as are all other fields. --raw-names writes the raw id as name instead.\n\n" +
 			"The client key comes from the cluster Secret (--client, optional when the release has\n" +
 			"one client) or from an environment variable (--key-env). It is never printed.",
 		Args: cobra.NoArgs,
@@ -73,5 +77,6 @@ func newOpenCodeCmd(g *globals) *cobra.Command {
 	f.BoolVar(&o.SetKey, "set-key", false, "also write the client key as the providers' apiKey")
 	f.BoolVar(&o.NoAnthropic, "no-anthropic", false, "skip the Anthropic provider")
 	f.BoolVar(&o.NoOpenAI, "no-openai", false, "skip the OpenAI provider")
+	f.BoolVar(&o.RawNames, "raw-names", false, "use the raw endpoint id as model name instead of a readable one")
 	return c
 }
