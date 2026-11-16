@@ -20,15 +20,27 @@ data:
     {{- $_ := set $cfg "endpoints" (merge (deepCopy (get $cfg "endpoints" | default dict)) (deepCopy (.Values.defaultEndpoints | default dict))) }}
     {{- end }}
     {{- range $providers }}
+    {{- $prov := . }}
+    {{- if .sidecar }}
     {{- if hasKey $pools .name }}
     {{- fail (printf "providers.%s conflicts with a pool of the same name in config.pools" .name) }}
     {{- end }}
-    {{- if .sidecar }}
     {{- $pool := dict "upstream_url" (printf "http://localhost:%d" (int .port)) "max_concurrency" (int .maxConcurrency) "protocol" .protocol }}
     {{- $_ := set $pools .name $pool }}
     {{- else }}
-    {{- $pool := dict "upstream_url" .url "max_concurrency" (int .maxConcurrency) "protocol" .protocol "api_key" (printf "${%s}" .envName) }}
+    {{- range .apiPools }}
+    {{- if hasKey $pools .name }}
+    {{- fail (printf "providers.%s: pool %s conflicts with a pool of the same name in config.pools or another provider" $prov.name .name) }}
+    {{- end }}
+    {{- $pool := dict "upstream_url" $prov.url "max_concurrency" (int $prov.maxConcurrency) "protocol" .protocol "api_key" (printf "${%s}" $prov.envName) }}
+    {{- if $prov.group }}
+    {{- $_ := set $pool "concurrency_group" $prov.group }}
+    {{- end }}
+    {{- if $prov.auth }}
+    {{- $_ := set $pool "auth" $prov.auth }}
+    {{- end }}
     {{- $_ := set $pools .name $pool }}
+    {{- end }}
     {{- end }}
     {{- end }}
     {{- if $pools }}

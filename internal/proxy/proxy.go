@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/lerenn/llm-proxy-manifestd/internal/config"
+	"github.com/lerenn/llm-proxy-manifestd/internal/pool"
 )
 
 const maxBodyBytes = 64 << 20
@@ -163,9 +164,13 @@ func (h *Handler) status(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
 		return
 	}
+	type poolStatus struct {
+		pool.Stats
+		Group string `json:"concurrency_group,omitempty"` // stats are the group's
+	}
 	out := make(map[string]any, len(st.Pools))
 	for name, p := range st.Pools {
-		out[name] = p.Stats()
+		out[name] = poolStatus{p.Stats(), st.Config.Pools[name].ConcurrencyGroup}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"pools": out})
 }
@@ -451,17 +456,16 @@ func (t *failoverTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		out.URL.RawPath = ""
 		out.Host = pc.Parsed.Host
 		out.Header.Del("Authorization")
-		if t.proto == config.ProtocolAnthropic {
-			// Anthropic upstreams authenticate with x-api-key; the client's
-			// credentials are never forwarded. anthropic-version and
-			// anthropic-beta pass through untouched.
-			out.Header.Del("X-Api-Key")
-			if pc.APIKey != "" {
+		// The client's credentials are never forwarded. Anthropic pools
+		// default to x-api-key, openai pools to bearer (pool `auth` overrides);
+		// anthropic-version and anthropic-beta pass through untouched.
+		out.Header.Del("X-Api-Key")
+		if pc.APIKey != "" {
+			if pc.AuthScheme() == config.AuthBearer {
+				out.Header.Set("Authorization", "Bearer "+pc.APIKey)
+			} else {
 				out.Header.Set("X-Api-Key", pc.APIKey)
 			}
-		} else if pc.APIKey != "" {
-			out.Header.Del("X-Api-Key")
-			out.Header.Set("Authorization", "Bearer "+pc.APIKey)
 		}
 		body, err := t.bodyFor(idx)
 		if err != nil {

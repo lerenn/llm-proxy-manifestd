@@ -67,7 +67,7 @@
 
     fill($('pools'), s.pools.map(function (p) {
       var q = p.queue_by_priority.map(function (x) { return 'p' + x.priority + ': ' + x.count; }).join(', ') || '–';
-      return [[p.name + (p.protocol ? ' (' + p.protocol + ')' : '')], [p.upstream], [p.active_slots + ' / ' + (p.unlimited ? 'unlimited' : p.max_concurrency), 'num'],
+      return [[p.name + (p.protocol ? ' (' + p.protocol + ')' : '') + (p.concurrency_group ? ' [group ' + p.concurrency_group + ']' : '')], [p.upstream], [p.active_slots + ' / ' + (p.unlimited ? 'unlimited' : p.max_concurrency), 'num'],
         [n(p.queued), 'num'], [q], [n(p.total_served), 'num']];
     }), 6);
     $('clients-sec').hidden = !s.auth_enabled;

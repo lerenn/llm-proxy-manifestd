@@ -88,3 +88,21 @@ func TestCheckerWarnsMissingClientKey(t *testing.T) {
 		t.Fatalf("code=%d out=%q err=%q", code, out, errs)
 	}
 }
+
+func TestCheckerConcurrencyGroup(t *testing.T) {
+	dir := t.TempDir()
+	p := dir + "/c.yaml"
+	y := "pools:\n  a: {upstream_url: 'http://x', max_concurrency: 1, concurrency_group: g}\n  b: {upstream_url: 'http://x', max_concurrency: 1, concurrency_group: g}\nendpoints:\n  openai:\n    m: {targets: [{pool: a}]}\n"
+	if err := os.WriteFile(p, []byte(y), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"-f", p}, &out, &errb); code != 0 || !strings.Contains(out.String(), "1 concurrency groups") {
+		t.Fatalf("code=%d out=%q err=%q", code, out.String(), errb.String())
+	}
+	y = strings.Replace(y, "max_concurrency: 1, concurrency_group: g}\nendpoints", "max_concurrency: 2, concurrency_group: g}\nendpoints", 1)
+	_ = os.WriteFile(p, []byte(y), 0o644)
+	if code := run([]string{"-f", p}, &out, &errb); code != 1 {
+		t.Fatalf("mismatch should fail, code=%d", code)
+	}
+}

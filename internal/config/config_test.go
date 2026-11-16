@@ -396,3 +396,26 @@ func TestClientsConfig(t *testing.T) {
 		}
 	}
 }
+
+func TestConcurrencyGroupAndAuthValidation(t *testing.T) {
+	ok := "pools:\n  a: {upstream_url: 'http://x', max_concurrency: 1, concurrency_group: g, protocol: anthropic}\n  b: {upstream_url: 'http://x', max_concurrency: 1, concurrency_group: g, auth: bearer}\n"
+	c, err := Parse([]byte(ok))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Pools["a"].AuthScheme() != AuthXAPIKey || c.Pools["b"].AuthScheme() != AuthBearer {
+		t.Fatal("auth defaults")
+	}
+	if _, err := Parse([]byte("pools:\n  a: {upstream_url: 'http://x', concurrency_group: g}\n  b: {upstream_url: 'http://x', concurrency_group: g}\n")); err != nil {
+		t.Fatalf("unlimited group should be allowed: %v", err)
+	}
+	bad := map[string]string{
+		"mismatch": "pools:\n  a: {upstream_url: 'http://x', max_concurrency: 1, concurrency_group: g}\n  b: {upstream_url: 'http://x', max_concurrency: 2, concurrency_group: g}\n",
+		"auth":     "pools:\n  a: {upstream_url: 'http://x', auth: basic}\n",
+	}
+	for n, y := range bad {
+		if _, err := Parse([]byte(y)); err == nil {
+			t.Errorf("%s: expected error", n)
+		}
+	}
+}

@@ -125,9 +125,34 @@ type PoolConfig struct {
 	// "anthropic". It decides which endpoints may target the pool and how
 	// the API key is injected.
 	Protocol string `yaml:"protocol"`
+	// ConcurrencyGroup, when set, makes every pool naming the same group share
+	// ONE slot limit and ONE wait queue (across protocols). All members must
+	// declare the same max_concurrency.
+	ConcurrencyGroup string `yaml:"concurrency_group"`
+	// Auth selects how the upstream API key is injected: "bearer"
+	// (Authorization: Bearer) or "x-api-key". Default: x-api-key for
+	// anthropic pools, bearer for openai pools.
+	Auth string `yaml:"auth"`
 
 	// Parsed is the parsed UpstreamURL, set by Validate.
 	Parsed *url.URL `yaml:"-"`
+}
+
+// Upstream authentication schemes for PoolConfig.Auth.
+const (
+	AuthBearer  = "bearer"
+	AuthXAPIKey = "x-api-key"
+)
+
+// AuthScheme returns the effective upstream auth scheme of the pool.
+func (p PoolConfig) AuthScheme() string {
+	if p.Auth != "" {
+		return p.Auth
+	}
+	if p.Protocol == ProtocolAnthropic {
+		return AuthXAPIKey
+	}
+	return AuthBearer
 }
 
 // Supported pool/endpoint protocols.
@@ -306,6 +331,11 @@ func (c *Config) validate() error {
 		default:
 			return fmt.Errorf("pool %q: unknown protocol %q (want anthropic or openai)", name, p.Protocol)
 		}
+		switch p.Auth {
+		case "", AuthBearer, AuthXAPIKey:
+		default:
+			return fmt.Errorf("pool %q: unknown auth %q (want bearer or x-api-key)", name, p.Auth)
+		}
 		u, err := url.Parse(p.UpstreamURL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			// The value is deliberately not echoed: it may embed credentials.
@@ -313,6 +343,21 @@ func (c *Config) validate() error {
 		}
 		p.Parsed = u
 		c.Pools[name] = p
+	}
+	groupMax := map[string]string{} // group -> first member
+	for _, name := range sortedPoolNames(c.Pools) {
+		p := c.Pools[name]
+		if p.ConcurrencyGroup == "" {
+			continue
+		}
+		if first, ok := groupMax[p.ConcurrencyGroup]; ok {
+			if c.Pools[first].MaxConcurrency != p.MaxConcurrency {
+				return fmt.Errorf("pool %q: concurrency_group %q members must declare the same max_concurrency (%q has %d, %q has %d)",
+					name, p.ConcurrencyGroup, first, c.Pools[first].MaxConcurrency, name, p.MaxConcurrency)
+			}
+		} else {
+			groupMax[p.ConcurrencyGroup] = name
+		}
 	}
 	for proto, eps := range c.Endpoints {
 		if proto != ProtocolOpenAI && proto != ProtocolAnthropic {
@@ -493,11 +538,37 @@ func buildState(cfg *Config, prev *RuntimeState) *RuntimeState {
 	if prev != nil {
 		st.Generation = prev.Generation + 1
 	}
-	for name, pc := range cfg.Pools {
+	groups := map[string]*pool.Pool{} // instances shared by concurrency groups
+	for _, name := range sortedPoolNames(cfg.Pools) {
+		pc := cfg.Pools[name]
+		if g := pc.ConcurrencyGroup; g != "" {
+			if p, ok := groups[g]; ok {
+				st.Pools[name] = p
+				continue
+			}
+			var p *pool.Pool
+			if prev != nil {
+				// Keep the live group (slots, queue) if any member of it existed.
+				for pn, opc := range prev.Config.Pools {
+					if opc.ConcurrencyGroup == g {
+						p = prev.Pools[pn]
+						break
+					}
+				}
+			}
+			if p != nil {
+				p.Resize(pc.MaxConcurrency, aging)
+			} else {
+				p = pool.New(pc.MaxConcurrency, aging)
+			}
+			groups[g] = p
+			st.Pools[name] = p
+			continue
+		}
 		if prev != nil {
 			if old, ok := prev.Pools[name]; ok {
 				oc := prev.Config.Pools[name]
-				if oc.UpstreamURL == pc.UpstreamURL && oc.APIKey == pc.APIKey {
+				if oc.ConcurrencyGroup == "" && oc.UpstreamURL == pc.UpstreamURL && oc.APIKey == pc.APIKey {
 					old.Resize(pc.MaxConcurrency, aging)
 					st.Pools[name] = old
 					continue
@@ -507,6 +578,15 @@ func buildState(cfg *Config, prev *RuntimeState) *RuntimeState {
 		st.Pools[name] = pool.New(pc.MaxConcurrency, aging)
 	}
 	return st
+}
+
+func sortedPoolNames(m map[string]PoolConfig) []string {
+	names := make([]string, 0, len(m))
+	for n := range m {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // Watch reloads the config on file changes until ctx is done. It watches the

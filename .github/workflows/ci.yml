@@ -49,6 +49,19 @@ jobs:
           verb: call
           args: build-cli entries
 
+  chart:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Helm lint and template tests
+        run: |
+          helm lint deploy/charts/llm-proxy-manifestd
+          deploy/charts/test.sh
+
   website:
     runs-on: ubuntu-latest
     steps:
