@@ -43,20 +43,69 @@ dashboard:
     annotations: {}
     tls: []
 
-# Rendered verbatim as config.yaml. Changing it hot-reloads the running pods.
+# CLI adapter sidecars, one per subscription account (see the "Subscription
+# accounts" guide). Each entry renders, in the same pod: one sidecar container
+# listening on 127.0.0.1:<port>, one PVC holding its login at /data/claude, and
+# a pool of the same name (upstream_url http://localhost:<port>) merged into
+# config.pools. Reference the pool from routes as usual. Empty = feature off.
+#
+# Setting any account forces replicas: 1 and strategy Recreate, disables the
+# service account token and runs every container non-root with a read-only
+# root filesystem. Adding or removing an account restarts the pod.
+#
+# accounts:
+#   claude-subscription:
+#     type: claude            # only "claude" is supported
+#     maxConcurrency: 4       # pool max_concurrency (default 4)
+#     # port: 9100            # default: accountsBasePort + index in name order
+#     # storage: {size: 1Gi, storageClass: ""}   # overrides accountStorage
+#     # resources: {}         # overrides adapters.claude.resources
+#     # env: []               # extra container env entries
+accounts: {}
+
+# First loopback port assigned to accounts (sorted by name, +1 each).
+accountsBasePort: 9100
+
+# Defaults for each account's login volume (ReadWriteOnce).
+accountStorage:
+  size: 1Gi
+  storageClass: ""
+
+adapters:
+  claude:
+    image:
+      repository: ghcr.io/lerenn/llm-proxy-manifestd-adapter-claude
+      # Defaults to the chart appVersion (adapter and proxy are released together).
+      tag: ""
+      pullPolicy: IfNotPresent
+    resources: {}
+
+# Rendered as config.yaml (account pools are merged into `pools`). Changing it hot-reloads the running pods.
 config:
   server:
     listen: ":8080"
     queue_timeout: "120s"
     aging_interval: "5s"
-  pools:
-    codex-sub:
-      upstream_url: http://cliproxyapi.default.svc.cluster.local:8317
-      api_key: "${LOCAL_BRIDGE_KEY}"
-      max_concurrency: 2
+  # Add your own pools/routes here. With no `accounts`, the chart also applies
+  # `defaultPools`/`defaultRoutes` below (the original example config) under yours.
+  pools: {}
   routes:
-    codex-interactive: {pool: codex-sub, target_model: gpt-5.4, priority: 100}
-    codex-default: {pool: codex-sub, target_model: gpt-5.4, priority: 50}
-    codex-background: {pool: codex-sub, target_model: gpt-5.4, priority: 10}
     # Several pools per route (least in-flight first, failover on 5xx/transport error):
     # standard-medium: {pools: [claude-a, claude-b], target_model: "claude-sonnet-5-5@medium", priority: 50}
+    # Per-protocol endpoints (Claude clients use the anthropic endpoint):
+    # fast:
+    #   endpoints:
+    #     anthropic: {pools: [claude-subscription], target_model: "claude-haiku-5-5@low", priority: 10}
+    {}
+
+# Example pool and routes applied only when `accounts` is empty (kept so that
+# existing installs render unchanged). Set both to {} to disable.
+defaultPools:
+  codex-sub:
+    upstream_url: http://cliproxyapi.default.svc.cluster.local:8317
+    api_key: "${LOCAL_BRIDGE_KEY}"
+    max_concurrency: 2
+defaultRoutes:
+  codex-interactive: {pool: codex-sub, target_model: gpt-5.4, priority: 100}
+  codex-default: {pool: codex-sub, target_model: gpt-5.4, priority: 50}
+  codex-background: {pool: codex-sub, target_model: gpt-5.4, priority: 10}

@@ -6,4 +6,22 @@ metadata:
     {{- include "llm-proxy-manifestd.labels" . | nindent 4 }}
 data:
   config.yaml: |
-    {{- toYaml .Values.config | nindent 4 }}
+    {{- $accounts := include "llm-proxy-manifestd.accounts" . | fromJsonArray }}
+    {{- $cfg := deepCopy .Values.config }}
+    {{- $pools := deepCopy (get $cfg "pools" | default dict) }}
+    {{- if not $accounts }}
+    {{- $pools = merge $pools (deepCopy .Values.defaultPools) }}
+    {{- $_ := set $cfg "routes" (merge (deepCopy (get $cfg "routes" | default dict)) (deepCopy .Values.defaultRoutes)) }}
+    {{- end }}
+    {{- range $accounts }}
+    {{- if hasKey $pools .name }}
+    {{- fail (printf "accounts.%s conflicts with a pool of the same name in config.pools" .name) }}
+    {{- end }}
+    {{- $pool := dict "upstream_url" (printf "http://localhost:%d" (int .port)) "max_concurrency" (int .maxConcurrency) }}
+    {{- $_ := set $pool "protocol" (ternary "anthropic" "openai" (eq .type "claude")) }}
+    {{- $_ := set $pools .name $pool }}
+    {{- end }}
+    {{- if $pools }}
+    {{- $_ := set $cfg "pools" $pools }}
+    {{- end }}
+    {{- toYaml $cfg | nindent 4 }}
