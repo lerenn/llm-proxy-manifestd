@@ -3,7 +3,8 @@ name: Auto release
 # Every push to main (i.e. every merged PR) that touches more than docs
 # publishes the next semver version. See website/docs/guide/releasing.md.
 #
-# Flow: version -> test -> publish (image + chart) -> tag (+ GitHub Release).
+# Flow: version -> test -> publish (image + chart) -> tag (+ GitHub Release
+# with the lpmctl binaries attached).
 #
 # Why the tag comes LAST: if we tagged first and publishing then failed, we
 # would have a tag with no artifacts, and a retry would compute the *next*
@@ -139,6 +140,13 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+      # Built before tagging: a failed build leaves no tag (see above).
+      - name: Build lpmctl release binaries
+        uses: dagger/dagger-for-github@v7
+        with:
+          version: "0.21.11"
+          verb: call
+          args: build-cli --version=${{ needs.version.outputs.version }} export --path=dist
       - name: Create tag and GitHub Release
         env:
           VERSION: ${{ needs.version.outputs.version }}
@@ -153,4 +161,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "${VERSION}" -m "Release ${VERSION}" "${GITHUB_SHA}"
           git push origin "refs/tags/${VERSION}"
-          gh release create "${VERSION}" --verify-tag --generate-notes --title "${VERSION}"
+          # Assets: lpmctl-<os>-<arch> binaries and lpmctl-sha256sums.txt.
+          gh release create "${VERSION}" --verify-tag --generate-notes --title "${VERSION}" dist/*

@@ -10,7 +10,7 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: read
+  contents: write   # GitHub Release + lpmctl assets
   packages: write
 
 jobs:
@@ -51,3 +51,19 @@ jobs:
           args: publish-chart --version=${{ github.ref_name }} --registry-user=lerenn --registry-token=env:GITHUB_TOKEN
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build lpmctl release binaries
+        uses: dagger/dagger-for-github@v7
+        with:
+          version: "0.21.11"
+          verb: call
+          args: build-cli --version=${{ github.ref_name }} export --path=dist
+      - name: Attach lpmctl binaries to the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "${VERSION}" >/dev/null 2>&1; then
+            gh release create "${VERSION}" --verify-tag --generate-notes --title "${VERSION}"
+          fi
+          gh release upload "${VERSION}" dist/* --clobber

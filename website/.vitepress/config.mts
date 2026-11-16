@@ -32,6 +32,7 @@ export default defineConfig({
           { text: 'Subscription providers', link: '/guide/subscription-providers' },
           { text: 'Using opencode', link: '/guide/opencode' },
           { text: 'Client API keys', link: '/guide/client-keys' },
+          { text: 'lpmctl (CLI)', link: '/guide/lpmctl' },
           { text: 'Releasing', link: '/guide/releasing' },
         ],
       },
