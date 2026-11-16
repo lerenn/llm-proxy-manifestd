@@ -71,6 +71,24 @@ Config changes, including a route's `pools`, are applied on hot-reload; in-fligh
 
 The dashboard shows each route's `pools` and their upstream host names (the JSON also keeps `pool`/`upstream` for the first pool).
 
+## Per-protocol endpoints
+
+Pools declare `protocol: anthropic|openai` (default `openai`). A route may serve both APIs with `endpoints:` keyed by protocol; `pool`/`pools`/`target_model`/`priority` on the route stay a shorthand for the `openai` endpoint (use one form or the other).
+
+```yaml
+routes:
+  fast:
+    endpoints:
+      anthropic: {pools: [claude-subscription], target_model: "claude-haiku-5-5@low", priority: 10}
+      openai:    {pools: [codex-subscription],  target_model: "gpt-6-luna@low",       priority: 10}
+```
+
+`/v1/messages` and `/v1/messages/count_tokens` use the `anthropic` endpoint, other `/v1/` calls the `openai` one; a missing endpoint returns 404 `endpoint_not_configured` in the API's error shape. There is no protocol translation. The pool key is sent as `Authorization: Bearer` (openai) or `x-api-key` (anthropic); `anthropic-version`/`anthropic-beta` pass through.
+
+## Checker
+
+The image also contains `/checker`, which validates a manifest with the proxy's own loader: `docker run --rm -v $PWD/config.yaml:/config.yaml --entrypoint /checker <image> -f /config.yaml`. Exit 0 if valid, 1 with a readable error otherwise. Unset `${VAR}`s expand to empty and do not fail validation; secrets are never printed. See [Protocol endpoints](https://llm-proxy-manifestd.lerenn.dev/guide/protocol-endpoints).
+
 ## Dashboard
 
 The binary embeds a lightweight, read-only dashboard (status, version, uptime, slots, queue depth per priority, per-route in-flight/queued/requests/errors, last config reload). It is public and shows only names, upstream host names, counts and timings, never keys, URLs, prompts or headers.

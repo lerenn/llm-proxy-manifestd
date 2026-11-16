@@ -63,12 +63,21 @@ type dashboardQueue struct {
 
 type dashboardPool struct {
 	Name           string           `json:"name"`
+	Protocol       string           `json:"protocol"`
 	Upstream       string           `json:"upstream"`
 	MaxConcurrency int              `json:"max_concurrency"`
 	Active         int              `json:"active_slots"`
 	Queued         int              `json:"queued"`
 	QueueByPrio    []dashboardQueue `json:"queue_by_priority"`
 	TotalServed    int64            `json:"total_served"`
+}
+
+type dashboardEndpoint struct {
+	Protocol  string   `json:"protocol"`
+	Pools     []string `json:"pools"`
+	Upstreams []string `json:"upstreams"`
+	Target    string   `json:"target_model,omitempty"`
+	Priority  int      `json:"priority"`
 }
 
 type dashboardRoute struct {
@@ -80,10 +89,13 @@ type dashboardRoute struct {
 	Upstreams []string `json:"upstreams"`
 	Target    string   `json:"target_model,omitempty"`
 	Priority  int      `json:"priority"`
-	InFlight  int64    `json:"in_flight"`
-	Queued    int64    `json:"queued"`
-	Requests  int64    `json:"requests"`
-	Errors    int64    `json:"errors"`
+	// Endpoints lists the per-protocol endpoints; the flat fields above
+	// mirror the openai endpoint (or the first one when there is none).
+	Endpoints []dashboardEndpoint `json:"endpoints"`
+	InFlight  int64               `json:"in_flight"`
+	Queued    int64               `json:"queued"`
+	Requests  int64               `json:"requests"`
+	Errors    int64               `json:"errors"`
 }
 
 func (h *Handler) dashboardSnapshot() (dashboardState, bool) {
@@ -132,7 +144,7 @@ func (h *Handler) dashboardSnapshot() (dashboardState, bool) {
 		}
 		sort.Slice(prios, func(i, j int) bool { return prios[i].Priority > prios[j].Priority })
 		out.Pools = append(out.Pools, dashboardPool{
-			Name: n, Upstream: host, MaxConcurrency: s.MaxConcurrency, Active: s.Active,
+			Name: n, Protocol: st.Config.Pools[n].Protocol, Upstream: host, MaxConcurrency: s.MaxConcurrency, Active: s.Active,
 			Queued: s.QueueDepth, QueueByPrio: prios, TotalServed: s.TotalServed,
 		})
 		out.Totals.Slots += s.MaxConcurrency
@@ -142,13 +154,24 @@ func (h *Handler) dashboardSnapshot() (dashboardState, bool) {
 	for _, n := range st.Config.RouteNames() {
 		r := st.Config.Routes[n]
 		rc := h.counters(n)
-		ups := make([]string, len(r.Pools))
-		for i, pn := range r.Pools {
-			ups[i] = upstream[pn]
+		var eps []dashboardEndpoint
+		for _, proto := range r.EndpointProtocols() {
+			e := r.Endpoints[proto]
+			ups := make([]string, len(e.Pools))
+			for i, pn := range e.Pools {
+				ups[i] = upstream[pn]
+			}
+			eps = append(eps, dashboardEndpoint{Protocol: proto, Pools: e.Pools, Upstreams: ups, Target: e.TargetModel, Priority: e.Priority})
+		}
+		first := eps[0]
+		for _, e := range eps {
+			if e.Protocol == "openai" {
+				first = e
+			}
 		}
 		dr := dashboardRoute{
-			Name: n, Pool: r.Pools[0], Upstream: ups[0], Pools: r.Pools, Upstreams: ups,
-			Target: r.TargetModel, Priority: r.Priority,
+			Name: n, Pool: first.Pools[0], Upstream: first.Upstreams[0], Pools: first.Pools, Upstreams: first.Upstreams,
+			Target: first.Target, Priority: first.Priority, Endpoints: eps,
 			InFlight: rc.inflight.Load(), Queued: rc.queued.Load(),
 			Requests: rc.requests.Load(), Errors: rc.errors.Load(),
 		}

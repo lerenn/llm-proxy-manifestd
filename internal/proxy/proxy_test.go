@@ -69,7 +69,7 @@ func TestRewriteAndHeaders(t *testing.T) {
 	defer up.Close()
 	s := serve(t, newState(t, up.URL, 1, time.Second))
 
-	for _, path := range []string{"/v1/chat/completions", "/v1/responses", "/v1/messages"} {
+	for _, path := range []string{"/v1/chat/completions", "/v1/responses"} {
 		resp := post(t, s.URL+path, `{"model":"fast","stream":true}`, map[string]string{
 			"Authorization": "Bearer client", "X-Session-Id": "abc", "OpenAI-Beta": "responses=v1", "X-Priority": "5",
 		})

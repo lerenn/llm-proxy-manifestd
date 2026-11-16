@@ -86,22 +86,74 @@ type PoolConfig struct {
 	UpstreamURL    string `yaml:"upstream_url"`
 	APIKey         string `yaml:"api_key"`
 	MaxConcurrency int    `yaml:"max_concurrency"`
+	// Protocol is the API the upstream speaks: "openai" (default) or
+	// "anthropic". It decides which route endpoint may use the pool and how
+	// the API key is injected.
+	Protocol string `yaml:"protocol"`
 
 	// Parsed is the parsed UpstreamURL, set by Validate.
 	Parsed *url.URL `yaml:"-"`
 }
 
-// Route maps a client-facing model name to one or more pools. Set exactly one
-// of Pool (single pool) or Pools (ordered list). After validation Pools is
-// always populated (Pool is expanded into a one-element list).
+// Supported pool/endpoint protocols.
+const (
+	ProtocolOpenAI    = "openai"
+	ProtocolAnthropic = "anthropic"
+)
+
+// Protocols lists the supported protocols.
+var Protocols = []string{ProtocolAnthropic, ProtocolOpenAI}
+
+// Endpoint is how a route is served for one protocol: an ordered list of pools
+// (all of that protocol), the model name sent upstream and a queue priority.
 //
 // TargetModel is passed upstream verbatim as an opaque string; a suffix such
 // as "@medium" has no meaning to the proxy.
-type Route struct {
+type Endpoint struct {
 	Pool        string   `yaml:"pool"`
 	Pools       []string `yaml:"pools"`
 	TargetModel string   `yaml:"target_model"`
 	Priority    int      `yaml:"priority"`
+}
+
+// Route maps a client-facing model name to per-protocol endpoints. Either use
+// the shorthand (pool/pools, target_model, priority), which defines the
+// "openai" endpoint, or the explicit Endpoints map, never both. After
+// validation Endpoints is always populated and the shorthand fields are
+// cleared.
+type Route struct {
+	Pool        string              `yaml:"pool"`
+	Pools       []string            `yaml:"pools"`
+	TargetModel string              `yaml:"target_model"`
+	Priority    int                 `yaml:"priority"`
+	Endpoints   map[string]Endpoint `yaml:"endpoints"`
+}
+
+// Endpoint returns the route's endpoint for protocol.
+func (r Route) Endpoint(protocol string) (Endpoint, bool) {
+	e, ok := r.Endpoints[protocol]
+	return e, ok
+}
+
+// EndpointProtocols returns the protocols the route serves, sorted.
+func (r Route) EndpointProtocols() []string {
+	out := make([]string, 0, len(r.Endpoints))
+	for p := range r.Endpoints {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// LoadFile reads and parses the manifest at path. It is the single entry point
+// used by both the proxy and the checker binary. Environment variables are
+// expanded as in Parse.
+func LoadFile(path string) (*Config, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read config: %w", err)
+	}
+	return Parse(raw)
 }
 
 // Parse expands environment variables in raw, unmarshals and validates it.
@@ -155,35 +207,76 @@ func (c *Config) validate() error {
 		if p.MaxConcurrency < 1 {
 			return fmt.Errorf("pool %q: max_concurrency must be >= 1", name)
 		}
+		switch p.Protocol {
+		case "":
+			p.Protocol = ProtocolOpenAI
+		case ProtocolOpenAI, ProtocolAnthropic:
+		default:
+			return fmt.Errorf("pool %q: unknown protocol %q (want anthropic or openai)", name, p.Protocol)
+		}
 		u, err := url.Parse(p.UpstreamURL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			return fmt.Errorf("pool %q: invalid upstream_url %q", name, p.UpstreamURL)
+			// The value is deliberately not echoed: it may embed credentials.
+			return fmt.Errorf("pool %q: invalid upstream_url (must be an absolute http(s) URL)", name)
 		}
 		p.Parsed = u
 		c.Pools[name] = p
 	}
 	for name, r := range c.Routes {
+		short := r.Pool != "" || r.Pools != nil || r.TargetModel != "" || r.Priority != 0
 		switch {
-		case r.Pool != "" && r.Pools != nil:
-			return fmt.Errorf("route %q: pool and pools are mutually exclusive", name)
-		case r.Pools != nil && len(r.Pools) == 0:
-			return fmt.Errorf("route %q: pools must not be empty", name)
-		case r.Pool == "" && r.Pools == nil:
-			return fmt.Errorf("route %q: one of pool or pools is required", name)
-		case r.Pools == nil:
-			r.Pools = []string{r.Pool}
-		}
-		seen := make(map[string]bool, len(r.Pools))
-		for _, pn := range r.Pools {
-			if _, ok := c.Pools[pn]; !ok {
-				return fmt.Errorf("route %q: unknown pool %q", name, pn)
+		case short && r.Endpoints != nil:
+			return fmt.Errorf("route %q: endpoints cannot be combined with pool/pools/target_model/priority", name)
+		case r.Endpoints == nil:
+			if !short {
+				return fmt.Errorf("route %q: one of pool, pools or endpoints is required", name)
 			}
-			if seen[pn] {
-				return fmt.Errorf("route %q: duplicate pool %q", name, pn)
-			}
-			seen[pn] = true
+			r.Endpoints = map[string]Endpoint{ProtocolOpenAI: {
+				Pool: r.Pool, Pools: r.Pools, TargetModel: r.TargetModel, Priority: r.Priority,
+			}}
+		case len(r.Endpoints) == 0:
+			return fmt.Errorf("route %q: endpoints must not be empty", name)
 		}
+		for proto, e := range r.Endpoints {
+			if proto != ProtocolOpenAI && proto != ProtocolAnthropic {
+				return fmt.Errorf("route %q: unknown endpoint protocol %q (want anthropic or openai)", name, proto)
+			}
+			if err := c.validateEndpoint(fmt.Sprintf("route %q endpoint %q", name, proto), proto, &e); err != nil {
+				return err
+			}
+			r.Endpoints[proto] = e
+		}
+		r.Pool, r.Pools, r.TargetModel, r.Priority = "", nil, "", 0
 		c.Routes[name] = r
+	}
+	return nil
+}
+
+func (c *Config) validateEndpoint(label, proto string, e *Endpoint) error {
+	switch {
+	case e.Pool != "" && e.Pools != nil:
+		return fmt.Errorf("%s: pool and pools are mutually exclusive", label)
+	case e.Pools != nil && len(e.Pools) == 0:
+		return fmt.Errorf("%s: pools must not be empty", label)
+	case e.Pool == "" && e.Pools == nil:
+		return fmt.Errorf("%s: one of pool or pools is required", label)
+	case e.Pools == nil:
+		e.Pools = []string{e.Pool}
+	}
+	e.Pool = ""
+	seen := make(map[string]bool, len(e.Pools))
+	for _, pn := range e.Pools {
+		pc, ok := c.Pools[pn]
+		if !ok {
+			return fmt.Errorf("%s: unknown pool %q", label, pn)
+		}
+		if seen[pn] {
+			return fmt.Errorf("%s: duplicate pool %q", label, pn)
+		}
+		seen[pn] = true
+		if pc.Protocol != proto {
+			return fmt.Errorf("%s: pool %q has protocol %q, want %q", label, pn, pc.Protocol, proto)
+		}
 	}
 	return nil
 }
