@@ -149,7 +149,7 @@ func TestDashboardLiveCounters(t *testing.T) {
 }
 
 func TestDashboardUnlimitedPool(t *testing.T) {
-	cfg, err := config.Parse([]byte("pools:\n  u: {upstream_url: 'https://user:hunter2pass@h.example.com/v1', api_key: 'sk-SUPERSECRET', max_concurrency: 0}\n  l: {upstream_url: 'http://l', max_concurrency: 2}\nroutes:\n  r: {pools: [u, l], target_model: m}\n"))
+	cfg, err := config.Parse([]byte("pools:\n  u: {upstream_url: 'https://user:hunter2pass@h.example.com/v1', api_key: 'sk-SUPERSECRET', max_concurrency: 0}\n  l: {upstream_url: 'http://l', max_concurrency: 2}\nendpoints:\n  openai:\n    r: {targets: [{pool: u, target_model: m}, {pool: l, target_model: m}]}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
