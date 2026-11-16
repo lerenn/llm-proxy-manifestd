@@ -452,6 +452,12 @@ func (t *failoverTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		}
 		name := t.ep.Targets[idx].Pool
 		pc := t.st.Config.Pools[name]
+		// The link counter follows the slot: up now, down with the release.
+		link := t.rc.link(name, t.ep.Targets[idx].TargetModel)
+		link.Add(1)
+		var linkOnce sync.Once
+		slotRelease := release
+		release = func() { linkOnce.Do(func() { link.Add(-1) }); slotRelease() }
 		for k, v := range remaining {
 			if v == idx {
 				remaining = append(remaining[:k:k], remaining[k+1:]...)

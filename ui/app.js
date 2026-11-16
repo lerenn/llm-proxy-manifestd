@@ -1,6 +1,8 @@
 'use strict';
 (function () {
   var POLL_MS = 2000;
+  var LIVE_MS = 1000;
+  var last = null;
   var $ = function (id) { return document.getElementById(id); };
 
   // Build DOM with textContent only: API data is never parsed as HTML.
@@ -93,10 +95,13 @@
       return [[x.name], [x.protocol], [x.mode], [String(x.priority), 'num'], [tg], [ups], [n(x.in_flight), 'num'],
         [n(x.queued), 'num'], [n(x.requests), 'num'], [n(x.errors), 'num' + (x.errors ? ' err' : '')]];
     }), 10);
+    last = s;
+    if (current === 'live') renderLive(s);
     $('updated').textContent = 'updated ' + now.toLocaleTimeString();
   }
 
-  var VIEWS = ['overview', 'pools', 'endpoints'];
+  var VIEWS = ['overview', 'pools', 'endpoints', 'live'];
+  var current = '';
   function route() {
     var v = (location.hash.replace(/^#\/?/, '') || 'overview');
     if (VIEWS.indexOf(v) < 0) v = 'overview';
@@ -105,6 +110,8 @@
       var a = document.querySelector('.sidebar a[data-view="' + name + '"]');
       if (name === v) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
     });
+    current = v;
+    if (v === 'live' && last) renderLive(last);
     document.title = v.charAt(0).toUpperCase() + v.slice(1) + ' · llm-proxy-manifestd dashboard';
     closeNav();
   }
@@ -126,6 +133,145 @@
     e.textContent = msg + ' Showing last known data; retrying…';
     e.hidden = false;
   }
+
+  // ---- Live View: inline SVG, deterministic layout, updated in place ----
+  var NS = 'http://www.w3.org/2000/svg';
+  var live = { sig: '', els: {} };
+  function svg(tag, attrs, text) {
+    var e = document.createElementNS(NS, tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (text != null) e.textContent = text;
+    return e;
+  }
+  function modelOf(ep, t) { return t.target_model || ep.name; }
+  function renderLive(s) {
+    var pools = s.pools || [], eps = s.endpoints || [];
+    var byPool = {}, poolOrder = [];
+    pools.forEach(function (p) { byPool[p.name] = { p: p, models: [] }; poolOrder.push(p.name); });
+    eps.forEach(function (ep) {
+      ep.targets.forEach(function (t) {
+        var b = byPool[t.pool];
+        if (b && b.models.indexOf(modelOf(ep, t)) < 0) b.models.push(modelOf(ep, t));
+      });
+    });
+    // Group routes by protocol (anthropic first), stable order.
+    var routes = eps.slice().sort(function (a, b) { return a.protocol === b.protocol ? 0 : (a.protocol < b.protocol ? -1 : 1); });
+    var ROW = 34, GAP = 8, RW = 190, MW = 220, PADX = 14, PW = MW + 2 * PADX, HEAD = 44, PGAP = 18, TOP = 28, X1 = 10, X2 = 10 + RW + 360;
+    // Structure signature: only rebuild the DOM when the topology changes.
+    var sig = JSON.stringify([routes.map(function (e) { return [e.protocol, e.name, e.targets.map(function (t) { return [t.pool, modelOf(e, t)]; })]; }),
+      poolOrder.map(function (n) { return [n, byPool[n].p.concurrency_group || '', byPool[n].models]; })]);
+    var svgEl = $('live');
+    if (sig !== live.sig) {
+      live.sig = sig; live.els = { routes: {}, pools: {}, arrows: [] };
+      svgEl.replaceChildren();
+      var defs = svg('defs', {});
+      defs.appendChild(svg('marker', { id: 'arr', viewBox: '0 0 10 10', refX: '9', refY: '5', markerWidth: '7', markerHeight: '7', orient: 'auto-start-reverse' })).appendChild(svg('path', { d: 'M0 0L10 5L0 10z', 'class': 'arrowhead' }));
+      svgEl.appendChild(defs);
+      var layer = { links: svg('g', {}), nodes: svg('g', {}), labels: svg('g', {}) };
+      svgEl.appendChild(layer.links); svgEl.appendChild(layer.nodes); svgEl.appendChild(layer.labels);
+      // Pools.
+      var y = TOP, modelPos = {};
+      poolOrder.forEach(function (n) {
+        var b = byPool[n], h = HEAD + Math.max(1, b.models.length) * (ROW + GAP) + 4;
+        var g = svg('g', { 'class': 'pool' });
+        var rect = svg('rect', { x: X2, y: y, width: PW, height: h, rx: 10 });
+        var title = svg('text', { x: X2 + PADX, y: y + 20, 'class': 'ptitle' }, n);
+        var sub = svg('text', { x: X2 + PADX, y: y + 36, 'class': 'psub' });
+        var badge = svg('text', { x: X2 + PW - PADX, y: y + 20, 'class': 'pbadge', 'text-anchor': 'end' });
+        var note = svg('text', { x: X2 + PW - PADX, y: y + 36, 'class': 'psub', 'text-anchor': 'end' });
+        [rect, title, sub, badge, note].forEach(function (e) { g.appendChild(e); });
+        layer.nodes.appendChild(g);
+        b.models.forEach(function (m, i) {
+          var my = y + HEAD + i * (ROW + GAP);
+          modelPos[n + '\0' + m] = my + ROW / 2;
+          var mg = svg('g', { 'class': 'model' });
+          mg.appendChild(svg('rect', { x: X2 + PADX, y: my, width: MW, height: ROW, rx: 6 }));
+          mg.appendChild(svg('text', { x: X2 + PADX + 10, y: my + ROW / 2 + 4 }, m.length > 30 ? m.slice(0, 29) + '…' : m)).appendChild(svg('title', {}, m));
+          layer.nodes.appendChild(mg);
+        });
+        live.els.pools[n] = { rect: rect, sub: sub, badge: badge, note: note, top: y, h: h };
+        y += h + PGAP;
+      });
+      var poolsH = y;
+      // Routes.
+      var ry = TOP, lastProto = '', routeH = 0, fan = {}, seen = {};
+      routes.forEach(function (ep) { ep.targets.forEach(function (t) { var k = t.pool + '\0' + modelOf(ep, t); fan[k] = (fan[k] || 0) + 1; }); });
+      routes.forEach(function (ep) {
+        if (ep.protocol !== lastProto) {
+          lastProto = ep.protocol;
+          layer.nodes.appendChild(svg('text', { x: X1, y: ry + 4, 'class': 'proto' }, ep.protocol.toUpperCase()));
+          ry += 14;
+        }
+        var key = ep.protocol + '/' + ep.name;
+        var g = svg('g', { 'class': 'route' });
+        g.appendChild(svg('rect', { x: X1, y: ry, width: RW, height: ROW + 4, rx: 6 }));
+        g.appendChild(svg('text', { x: X1 + 10, y: ry + 15 }, ep.name.length > 24 ? ep.name.slice(0, 23) + '…' : ep.name)).appendChild(svg('title', {}, ep.name));
+        var q = svg('text', { x: X1 + 10, y: ry + 29, 'class': 'psub' });
+        g.appendChild(q);
+        layer.nodes.appendChild(g);
+        live.els.routes[key] = { q: q, ep: ep };
+        var cy = ry + (ROW + 4) / 2;
+        ep.targets.forEach(function (t, i) {
+          var mk = t.pool + '\0' + modelOf(ep, t), ty = modelPos[mk];
+          if (ty == null) return;
+          var k = seen[mk] = (seen[mk] || 0) + 1;
+          ty += (k - 1 - (fan[mk] - 1) / 2) * 11; // fan arrows out on the model's edge
+          var x1 = X1 + RW, x2 = X2 + PADX, mx = (x1 + x2) / 2;
+          var path = svg('path', { d: 'M' + x1 + ' ' + cy + ' C' + mx + ' ' + cy + ' ' + mx + ' ' + ty + ' ' + (x2 - 1) + ' ' + ty, 'class': 'link' + (i > 0 ? ' fo' : ''), 'marker-end': 'url(#arr)', tabindex: '0' });
+          var lbl = svg('text', { x: x2 - 36, y: ty - 4, 'class': 'llabel', 'text-anchor': 'middle' });
+          path.addEventListener('focus', function () { lbl.classList.add('focus'); });
+          path.addEventListener('blur', function () { lbl.classList.remove('focus'); });
+          layer.links.appendChild(path); layer.labels.appendChild(lbl);
+          live.els.arrows.push({ path: path, lbl: lbl, key: key, i: i, pool: t.pool, model: modelOf(ep, t), order: i > 0 ? String(i + 1) : '' });
+        });
+        ry += ROW + 4 + GAP;
+      });
+      routeH = ry;
+      svgEl.setAttribute('viewBox', '0 0 ' + (X2 + PW + 10) + ' ' + Math.max(poolsH, routeH, 60));
+      svgEl.setAttribute('width', X2 + PW + 10);
+      svgEl.setAttribute('height', Math.max(poolsH, routeH, 60));
+    }
+    // In-place update of values.
+    var epByKey = {};
+    eps.forEach(function (e) { epByKey[e.protocol + '/' + e.name] = e; });
+    var perPool = {};
+    live.els.arrows.forEach(function (a) {
+      var ep = epByKey[a.key], t = ep && ep.targets[a.i];
+      a.x = t ? t.in_flight || 0 : 0;
+      perPool[a.pool] = (perPool[a.pool] || 0) + a.x;
+    });
+    poolOrder.forEach(function (n) {
+      var e = live.els.pools[n], p = byPool[n].p;
+      if (!e) return;
+      var sat = !p.unlimited && p.active_slots >= p.max_concurrency;
+      e.rect.setAttribute('class', sat ? 'sat' : (p.active_slots > 0 ? 'busy' : ''));
+      e.sub.textContent = (p.protocol || '') + (p.concurrency_group ? ' · group ' + p.concurrency_group : '') + ' · ' + p.active_slots + (p.unlimited ? '' : '/' + p.max_concurrency) + ' slots';
+      e.badge.textContent = p.queued > 0 ? p.queued + ' queued' : '';
+      e.note.textContent = p.coordinated ? 'slots shared; links: this pod' : '';
+    });
+    live.els.arrows.forEach(function (a) {
+      var p = byPool[a.pool].p;
+      var txt = a.x + (p.unlimited ? '' : '/' + p.max_concurrency);
+      var cls = 'link' + (a.i > 0 ? ' fo' : '') + (a.x > 0 ? ' on' : '');
+      if (a.path.getAttribute('class') !== cls) a.path.setAttribute('class', cls);
+      if (a.lbl.textContent !== (a.order ? '#' + a.order + ' ' + txt : txt)) a.lbl.textContent = a.order ? '#' + a.order + ' ' + txt : txt;
+      a.lbl.setAttribute('class', 'llabel' + (a.x > 0 ? ' on' : '') + (a.lbl.classList.contains('focus') ? ' focus' : ''));
+      var label = a.key.split('/')[1] + ' to ' + a.model + ' in ' + a.pool + ': ' + a.x + (p.unlimited ? ' active' : ' of ' + p.max_concurrency + ' active') + (a.order ? ' (failover target ' + a.order + ')' : '');
+      if (a.path.getAttribute('aria-label') !== label) a.path.setAttribute('aria-label', label);
+    });
+    for (var k in live.els.routes) {
+      var r = live.els.routes[k], e = epByKey[k];
+      var act = e ? e.targets.reduce(function (a, t) { return a + (t.in_flight || 0); }, 0) : 0;
+      r.q.textContent = e ? act + ' active' + (e.queued > 0 ? ' · ' + e.queued + ' queued' : '') : '';
+    }
+  }
+
+  function liveTick() {
+    if (current !== 'live' || document.hidden) return;
+    fetch('api/state', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (s) { if (s && current === 'live') { last = s; renderLive(s); } }).catch(function () {});
+  }
+  setInterval(liveTick, LIVE_MS);
 
   function tick() {
     var ctl = new AbortController();

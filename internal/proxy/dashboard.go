@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -17,6 +18,23 @@ type routeCounters struct {
 	queued   atomic.Int64
 	requests atomic.Int64
 	errors   atomic.Int64
+	// links counts ACTIVE requests per (pool, target_model) of this route: a
+	// request is active on a link from the moment it holds a slot in the
+	// pool until the response is fully streamed, cancelled or failed over.
+	// Keyed by name, not index, so a hot reload that reorders targets keeps
+	// counts attached to the right link. Per pod, not shared through Valkey.
+	links sync.Map // linkKey -> *atomic.Int64
+}
+
+func linkKey(pool, targetModel string) string { return pool + "\x00" + targetModel }
+
+func (c *routeCounters) link(pool, targetModel string) *atomic.Int64 {
+	k := linkKey(pool, targetModel)
+	if v, ok := c.links.Load(k); ok {
+		return v.(*atomic.Int64)
+	}
+	v, _ := c.links.LoadOrStore(k, new(atomic.Int64))
+	return v.(*atomic.Int64)
 }
 
 // counterKey identifies an endpoint across protocols.
@@ -103,6 +121,9 @@ type dashboardTarget struct {
 	Upstream string `json:"upstream"`
 	Target   string `json:"target_model,omitempty"`
 	Priority int    `json:"priority"`
+	// InFlight is the number of requests of this route currently holding a
+	// slot in Pool and being served with TargetModel (this pod only).
+	InFlight int64 `json:"in_flight"`
 }
 
 type dashboardEndpoint struct {
@@ -204,7 +225,7 @@ func (h *Handler) dashboardSnapshot() (dashboardState, bool) {
 			rc := h.counters(counterKey(proto, n))
 			ts := make([]dashboardTarget, len(e.Targets))
 			for i, t := range e.Targets {
-				ts[i] = dashboardTarget{Pool: t.Pool, Upstream: upstream[t.Pool], Target: t.TargetModel, Priority: e.QueuePriority(i)}
+				ts[i] = dashboardTarget{Pool: t.Pool, Upstream: upstream[t.Pool], Target: t.TargetModel, Priority: e.QueuePriority(i), InFlight: rc.link(t.Pool, t.TargetModel).Load()}
 			}
 			de := dashboardEndpoint{
 				Protocol: proto, Name: n, Mode: e.Mode, Priority: e.Priority, Targets: ts,

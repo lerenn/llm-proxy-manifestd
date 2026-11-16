@@ -4,8 +4,8 @@ A lightweight, read-only web dashboard is embedded in the binary (plain HTML/CSS
 build step) and served by the proxy itself. It polls every 2 seconds and follows
 `prefers-color-scheme`.
 
-A left sidebar switches between three views; the current view is kept in the URL hash
-(`#/overview`, `#/pools`, `#/endpoints`) so links and reloads work, and it defaults to Overview. On
+A left sidebar switches between four views; the current view is kept in the URL hash
+(`#/overview`, `#/pools`, `#/endpoints`, `#/live`) so links and reloads work, and it defaults to Overview. On
 narrow screens the sidebar collapses behind a menu button. It works the same on the dashboard host
 (`/`) and under the `/dashboard` mount.
 
@@ -17,9 +17,42 @@ narrow screens the sidebar collapses behind a menu button. It works the same on 
   queue depth, queue by priority and requests served.
 - **Endpoints**: a table per endpoint with protocol, mode, priority, ordered targets
   (pool → target model), upstream hosts, in flight, queued, requests and errors.
+- **Live View**: a live node graph, see below.
 
 The overall health badge stays visible in the header. Request and error counters are per process and
 reset on restart.
+
+## Live View
+
+`#/live` draws every route (endpoint, grouped by protocol) as a box on the left and every provider
+(pool) as a container on the right holding one box per model (distinct `target_model` used in that
+pool; the route name when a target has none). One arrow goes from each route to each of its targets,
+in target order; failover targets after the first are dashed and numbered (`#2`).
+
+Each arrow is labelled `x/y`, or just `x` when the pool is unlimited:
+
+- **x** = requests of that route currently *active* on that target: they hold a slot in the pool and
+  are being served by it, until the response (including an SSE stream) has ended, the client
+  cancelled, or the attempt failed and the request moved to the next target.
+  Requests still waiting in the queue are not counted; they show as a `queued` count on the
+  route box and a badge on the pool.
+- **y** = the pool's `max_concurrency` (the group's maximum for a concurrency group).
+
+Arrows with x > 0 are highlighted and animated; a pool whose slots are all taken is filled
+(saturated). Updates arrive every second while the view is visible and stop when it is hidden. Arrows
+are keyboard-focusable with an `aria-label` such as
+`fast to claude-haiku-5-5@low in claude-subscription: 1 of 3 active`.
+
+`GET /api/state` exposes the per-link number as `endpoints[].targets[].in_flight`.
+
+::: warning Per pod
+With several proxy pods, pool slot counts and queues are shared through Valkey
+([coordination](./coordination.md)), but the per route → model counters are kept per pod, and the
+dashboard queries one pod. A coordinated pool is annotated "slots shared; links: this pod", and the
+x values of its arrows can add up to less than the pool's shared active count. Counters reset on
+restart. A hot reload that renames or removes a target drops its arrow; requests still running on it
+finish without corrupting the counts.
+:::
 
 ## Routing
 

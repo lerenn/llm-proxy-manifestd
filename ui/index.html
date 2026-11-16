@@ -21,6 +21,7 @@
       <li><a href="#/overview" data-view="overview">Overview</a></li>
       <li><a href="#/pools" data-view="pools">Pools</a></li>
       <li><a href="#/endpoints" data-view="endpoints">Endpoints</a></li>
+      <li><a href="#/live" data-view="live">Live View</a></li>
     </ul>
   </nav>
   <main id="main" tabindex="-1">
@@ -43,6 +44,12 @@
         <thead><tr><th scope="col">Endpoint</th><th scope="col">Protocol</th><th scope="col">Mode</th><th scope="col" class="num">Priority</th><th scope="col">Targets (pool → model)</th><th scope="col">Upstreams</th><th scope="col" class="num">In flight</th><th scope="col" class="num">Queued</th><th scope="col" class="num">Requests</th><th scope="col" class="num">Errors</th></tr></thead>
         <tbody id="endpoints"></tbody>
       </table></div>
+    </section>
+
+    <section id="view-live" data-view="live" aria-labelledby="live-h" hidden>
+      <h2 id="live-h">Live View</h2>
+      <p class="sub">Routes (left) → provider pools and their models (right). Arrow label <code>x/y</code>: x = requests active on that route → model link, y = the pool's max concurrency (just <code>x</code> when unlimited). Counts are for the pod serving this page.</p>
+      <div class="scroll live-wrap"><svg id="live" class="live" role="group" aria-label="Live routes to providers graph"></svg></div>
     </section>
   </main>
 </div>

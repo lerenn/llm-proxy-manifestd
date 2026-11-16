@@ -65,3 +65,28 @@ main section > h2:first-child { margin-top: 0; }
   body.nav-open .sidebar { display: block; }
   .list dt { flex-basis: 100%; }
 }
+
+/* Live View: flat bicolor #1e1b3a / #a5b4fc */
+.live-wrap { padding: .5rem; margin-top: .75rem; max-height: 75vh; overflow: auto; background: #1e1b3a; }
+.live { display: block; font: 12px system-ui, sans-serif; color: #a5b4fc; }
+.live text { fill: #a5b4fc; }
+.live .route rect, .live .model rect { fill: #1e1b3a; stroke: #a5b4fc; stroke-width: 1.2; }
+.live .pool rect { fill: #26224a; stroke: #6b73b8; stroke-width: 1.2; }
+.live .pool rect.busy { stroke: #a5b4fc; }
+.live .pool rect.sat { fill: #a5b4fc; stroke: #a5b4fc; }
+.live .pool rect.sat ~ .ptitle, .live .pool rect.sat ~ .pbadge { fill: #1e1b3a; }
+.live .ptitle { font-weight: 700; font-size: 13px; }
+.live .psub, .live .proto { fill: #6b73b8; font-size: 10.5px; }
+.live .proto { letter-spacing: .08em; font-weight: 700; }
+.live .pbadge { fill: #1e1b3a; font-weight: 700; }
+.live .pool .pbadge { fill: #a5b4fc; }
+.live .pool rect.sat ~ .pbadge { fill: #1e1b3a; }
+.live .link { fill: none; stroke: #6b73b8; stroke-width: 1.2; opacity: .55; }
+.live .link.fo { stroke-dasharray: 5 4; }
+.live .link.on { stroke: #a5b4fc; stroke-width: 2.2; opacity: 1; stroke-dasharray: 8 6; animation: flow .8s linear infinite; }
+.live .link:focus-visible { outline: none; stroke-width: 3.5; opacity: 1; }
+.live .arrowhead { fill: #a5b4fc; }
+.live .llabel { font-size: 11px; font-variant-numeric: tabular-nums; paint-order: stroke; stroke: #1e1b3a; stroke-width: 4px; fill: #6b73b8; }
+.live .llabel.on, .live .llabel.focus { fill: #fff; font-weight: 700; }
+@keyframes flow { to { stroke-dashoffset: -14; } }
+@media (prefers-reduced-motion: reduce) { .live .link.on { animation: none; } }
