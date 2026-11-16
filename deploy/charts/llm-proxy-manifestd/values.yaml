@@ -60,13 +60,13 @@ dashboard:
 #   my-anthropic:
 #     type: anthropic-api     # pool protocol: anthropic
 #     url: https://api.anthropic.com   # default; no trailing /v1 (client paths already include it)
-#     maxConcurrency: 4
+#     maxConcurrency: 4       # 0 or omitted = unlimited (no limit, no queue)
 #     apiKey: {existingSecret: {name: my-secret, key: anthropic-key}}   # required
 #     # openai-api works the same (default url https://api.openai.com)
 # providers:
 #   claude-subscription:
 #     type: claude            # claude | codex | anthropic-api | openai-api
-#     maxConcurrency: 4       # pool max_concurrency (default 4)
+#     maxConcurrency: 4       # pool max_concurrency; 0 or omitted = unlimited
 #     # port: 9100            # default: providersBasePort + index in name order
 #     # storage: {size: 1Gi, storageClass: ""}   # overrides providerStorage
 #     # resources: {}         # overrides adapters.<type>.resources

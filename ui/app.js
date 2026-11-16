@@ -52,8 +52,8 @@
     $('version').textContent = s.version;
     $('uptime').textContent = dur(s.uptime_seconds);
     var t = s.totals;
-    $('slots').textContent = t.active_slots + ' / ' + t.slots;
-    $('slots-bar').style.width = (t.slots ? Math.min(100, 100 * t.active_slots / t.slots) : 0) + '%';
+    $('slots').textContent = t.active_slots + ' / ' + (t.unlimited ? 'unlimited' : t.slots);
+    $('slots-bar').style.width = (!t.unlimited && t.slots ? Math.min(100, 100 * t.active_slots / t.slots) : 0) + '%';
     $('queued').textContent = n(t.queued);
     $('inflight').textContent = n(t.in_flight);
     $('totals').textContent = n(t.requests) + ' / ' + n(t.errors);
@@ -67,7 +67,7 @@
 
     fill($('pools'), s.pools.map(function (p) {
       var q = p.queue_by_priority.map(function (x) { return 'p' + x.priority + ': ' + x.count; }).join(', ') || '–';
-      return [[p.name + (p.protocol ? ' (' + p.protocol + ')' : '')], [p.upstream], [p.active_slots + ' / ' + p.max_concurrency, 'num'],
+      return [[p.name + (p.protocol ? ' (' + p.protocol + ')' : '')], [p.upstream], [p.active_slots + ' / ' + (p.unlimited ? 'unlimited' : p.max_concurrency), 'num'],
         [n(p.queued), 'num'], [q], [n(p.total_served), 'num']];
     }), 6);
     fill($('endpoints'), (s.endpoints || []).map(function (x) {

@@ -354,3 +354,72 @@ func TestTryAcquire(t *testing.T) {
 		t.Fatal("slot should be free again")
 	}
 }
+
+func TestUnlimitedAcquire(t *testing.T) {
+	p := New(Unlimited, 0)
+	var rels []func()
+	for i := 0; i < 100; i++ {
+		rels = append(rels, mustAcquire(t, p, 0))
+	}
+	if r, ok := p.TryAcquire(); !ok {
+		t.Fatal("TryAcquire must succeed on an unlimited pool")
+	} else {
+		rels = append(rels, r)
+	}
+	if s := p.Stats(); !s.Unlimited || s.Active != 101 || s.QueueDepth != 0 {
+		t.Fatalf("stats %+v", s)
+	}
+	for _, r := range rels {
+		r()
+	}
+	if s := p.Stats(); s.Active != 0 {
+		t.Fatalf("stats %+v", s)
+	}
+}
+
+func TestResizeToUnlimitedReleasesWaiters(t *testing.T) {
+	p := New(1, 10*time.Millisecond) // aging must not matter
+	hold := mustAcquire(t, p, 0)
+	out := make(chan result, 3)
+	enqueue(t, p, 1, "a", out, 1)
+	enqueue(t, p, 5, "b", out, 2)
+	enqueue(t, p, 1, "c", out, 3)
+	p.Resize(Unlimited, 0)
+	var rels []func()
+	for i := 0; i < 3; i++ {
+		rels = append(rels, next(t, out).release)
+	}
+	if s := p.Stats(); s.QueueDepth != 0 || s.Active != 4 || !s.Unlimited {
+		t.Fatalf("stats %+v", s)
+	}
+	hold()
+	for _, r := range rels {
+		r()
+	}
+	if s := p.Stats(); s.Active != 0 {
+		t.Fatalf("leak: %+v", s)
+	}
+}
+
+func TestResizeUnlimitedToLimited(t *testing.T) {
+	p := New(Unlimited, 0)
+	r := []func(){mustAcquire(t, p, 0), mustAcquire(t, p, 0), mustAcquire(t, p, 0)}
+	p.Resize(1, 0)
+	if s := p.Stats(); s.Unlimited || s.MaxConcurrency != 1 || s.Active != 3 {
+		t.Fatalf("stats %+v", s)
+	}
+	out := make(chan result, 1)
+	enqueue(t, p, 1, "w", out, 1) // queued: active (3) >= max (1)
+	r[0]()
+	r[1]()
+	select {
+	case <-out:
+		t.Fatal("granted while above the new limit")
+	case <-time.After(50 * time.Millisecond):
+	}
+	r[2]()
+	next(t, out).release()
+	if a := p.Stats().Active; a != 0 {
+		t.Fatalf("active = %d", a)
+	}
+}

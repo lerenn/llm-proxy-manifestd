@@ -60,12 +60,14 @@ type dashboardConfig struct {
 }
 
 type dashboardTotals struct {
-	Slots    int   `json:"slots"`
-	Active   int   `json:"active_slots"`
-	Queued   int   `json:"queued"`
-	InFlight int64 `json:"in_flight"`
-	Requests int64 `json:"requests"`
-	Errors   int64 `json:"errors"`
+	Slots int `json:"slots"` // sum over limited pools only
+	// Unlimited is true when at least one pool has no slot limit.
+	Unlimited bool  `json:"unlimited"`
+	Active    int   `json:"active_slots"`
+	Queued    int   `json:"queued"`
+	InFlight  int64 `json:"in_flight"`
+	Requests  int64 `json:"requests"`
+	Errors    int64 `json:"errors"`
 }
 
 type dashboardQueue struct {
@@ -77,7 +79,8 @@ type dashboardPool struct {
 	Name           string           `json:"name"`
 	Protocol       string           `json:"protocol"`
 	Upstream       string           `json:"upstream"`
-	MaxConcurrency int              `json:"max_concurrency"`
+	MaxConcurrency int              `json:"max_concurrency"` // 0 when unlimited
+	Unlimited      bool             `json:"unlimited"`
 	Active         int              `json:"active_slots"`
 	Queued         int              `json:"queued"`
 	QueueByPrio    []dashboardQueue `json:"queue_by_priority"`
@@ -149,10 +152,14 @@ func (h *Handler) dashboardSnapshot() (dashboardState, bool) {
 		}
 		sort.Slice(prios, func(i, j int) bool { return prios[i].Priority > prios[j].Priority })
 		out.Pools = append(out.Pools, dashboardPool{
-			Name: n, Protocol: st.Config.Pools[n].Protocol, Upstream: host, MaxConcurrency: s.MaxConcurrency, Active: s.Active,
+			Name: n, Protocol: st.Config.Pools[n].Protocol, Upstream: host, MaxConcurrency: s.MaxConcurrency, Unlimited: s.Unlimited, Active: s.Active,
 			Queued: s.QueueDepth, QueueByPrio: prios, TotalServed: s.TotalServed,
 		})
-		out.Totals.Slots += s.MaxConcurrency
+		if s.Unlimited {
+			out.Totals.Unlimited = true
+		} else {
+			out.Totals.Slots += s.MaxConcurrency
+		}
 		out.Totals.Active += s.Active
 		out.Totals.Queued += s.QueueDepth
 	}

@@ -40,7 +40,7 @@ pools:
   <name>:
     upstream_url: http://cliproxyapi.default.svc.cluster.local:8317
     api_key: "${LOCAL_BRIDGE_KEY}"   # sent as "Authorization: Bearer ..."
-    max_concurrency: 2               # >= 1
+    max_concurrency: 2               # optional; 0 or omitted = unlimited, negative rejected
 dashboard:
   enabled: true            # default true
   host: ""                  # exact dashboard hostname; default: any host starting with "dashboard."
@@ -60,7 +60,7 @@ The pre-endpoints top-level `routes:` key (and the chart's `defaultRoutes` value
 are rejected with a migration hint; see [Protocol endpoints](./protocol-endpoints).
 
 Environment variables are expanded (`os.ExpandEnv`) on the raw YAML before parsing. Unknown keys,
-unknown or wrong-protocol pools in endpoint targets, `max_concurrency < 1`, bad URLs and bad durations are all rejected.
+unknown or wrong-protocol pools in endpoint targets, negative `max_concurrency`, bad URLs and bad durations are all rejected.
 
 ## Deployment behaviour
 

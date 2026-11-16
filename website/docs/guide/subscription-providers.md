@@ -84,7 +84,7 @@ Use the default `mode: least-inflight` instead to spread load over both pools (t
 providers:
   claude-subscription:
     type: claude          # only "claude" is supported
-    maxConcurrency: 4     # becomes the pool's max_concurrency (default 4)
+    maxConcurrency: 4     # pool max_concurrency; 0 or omitted = unlimited
     # port: 9100          # default: providersBasePort (9100) + index among `claude` providers in name order
     # storage: {size: 1Gi, storageClass: ""}   # overrides providerStorage
     # resources: {}
@@ -114,7 +114,7 @@ For every entry in `providers` the chart renders:
 
 The chart's example pool and endpoints (`defaultPools`/`defaultEndpoints`) are only applied when `providers` is empty, so they never interfere with provider setups.
 
-Spread an endpoint over several providers by listing several `targets` (see [Multi-pool routing](./multi-pool-routing)). `priority` and `max_concurrency`/`maxConcurrency` may be omitted (priority `0`, concurrency `4` for providers).
+Spread an endpoint over several providers by listing several `targets` (see [Multi-pool routing](./multi-pool-routing)). `priority` and `max_concurrency`/`maxConcurrency` may be omitted (priority `0`; concurrency unlimited).
 
 When at least one provider exists the Deployment uses `replicas: 1` and `strategy: Recreate`, `automountServiceAccountToken: false`, non-root users (65532 for the proxy, 10001 for adapters), `readOnlyRootFilesystem`, all capabilities dropped, a `check-config` init container that runs `/checker -f` on the rendered config (from the proxy image), and a per-container readiness probe. With `providers: {}` the chart renders exactly as before.
 

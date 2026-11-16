@@ -59,7 +59,7 @@ func TestParseDefaults(t *testing.T) {
 func TestValidationErrors(t *testing.T) {
 	cases := map[string]string{
 		"unknown pool":  "pools:\n  a: {upstream_url: 'http://x', max_concurrency: 1}\nendpoints:\n  openai:\n    r: {targets: [{pool: b}]}\n",
-		"zero conc":     "pools:\n  a: {upstream_url: 'http://x', max_concurrency: 0}\n",
+		"negative conc": "pools:\n  a: {upstream_url: 'http://x', max_concurrency: -1}\n",
 		"bad url":       "pools:\n  a: {upstream_url: 'nope', max_concurrency: 1}\n",
 		"bad duration":  "server: {queue_timeout: 'abc'}\npools:\n  a: {upstream_url: 'http://x', max_concurrency: 1}\n",
 		"no pools":      "server: {}\n",
@@ -358,5 +358,20 @@ func TestInvalidURLNotEchoed(t *testing.T) {
 	_, err := Parse([]byte("pools:\n  p: {upstream_url: 'ftp://user:hunter2@x', max_concurrency: 1}\n"))
 	if err == nil || strings.Contains(err.Error(), "hunter2") {
 		t.Fatalf("want error without secret, got %v", err)
+	}
+}
+
+func TestUnlimitedConcurrencyDefault(t *testing.T) {
+	for name, y := range map[string]string{
+		"omitted":  "pools:\n  a: {upstream_url: 'http://x'}\n",
+		"explicit": "pools:\n  a: {upstream_url: 'http://x', max_concurrency: 0}\n",
+	} {
+		c, err := Parse([]byte(y))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if c.Pools["a"].MaxConcurrency != 0 {
+			t.Fatalf("%s: want 0 (unlimited)", name)
+		}
 	}
 }

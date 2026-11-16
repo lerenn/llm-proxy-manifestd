@@ -2,6 +2,10 @@
 
 Each pool has `max_concurrency` slots. When all are busy, requests wait in a priority queue.
 
+::: warning Default changed: unlimited
+`max_concurrency: 0`, or omitting it, means **unlimited**: no slot limit, no queue, requests go straight through (so priorities and aging do not apply to that pool). Previously `max_concurrency` was required and had to be at least 1. Set an explicit positive number to keep a limit. Negative values are rejected. Switching a live pool between limited and unlimited on hot-reload is supported: waiters queued under a limit are released immediately when it becomes unlimited, and a new limit applies to new requests only (slots already held are kept). The dashboard shows `unlimited` instead of a slot count.
+:::
+
 ## Ordering
 
 1. Higher **effective priority** first.

@@ -147,3 +147,28 @@ func TestDashboardLiveCounters(t *testing.T) {
 		t.Errorf("counters not recorded: %s", b)
 	}
 }
+
+func TestDashboardUnlimitedPool(t *testing.T) {
+	cfg, err := config.Parse([]byte("pools:\n  u: {upstream_url: 'https://user:hunter2pass@h.example.com/v1', api_key: 'sk-SUPERSECRET', max_concurrency: 0}\n  l: {upstream_url: 'http://l', max_concurrency: 2}\nroutes:\n  r: {pools: [u, l], target_model: m}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &config.RuntimeState{Config: cfg, Generation: 1, LoadedAt: time.Now(),
+		Pools: map[string]*pool.Pool{"u": pool.New(0, 0), "l": pool.New(2, 0)}}
+	h := New(func() *config.RuntimeState { return st }, quiet())
+	rec := get(t, h, "proxy.test", "/dashboard/api/state")
+	if rec.Code != 200 {
+		t.Fatal(rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{`"unlimited":true`, `"slots":2`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %s in %s", want, body)
+		}
+	}
+	for _, bad := range []string{"SUPERSECRET", "hunter2"} {
+		if strings.Contains(body, bad) {
+			t.Errorf("leak %q", bad)
+		}
+	}
+}
