@@ -1,6 +1,6 @@
-// Package oai holds the minimal OpenAI chat-completions types and helpers
-// shared by the CLI adapters.
-package oai
+// Package anthropic holds the minimal Anthropic Messages API types and
+// helpers used by the Claude adapter.
+package anthropic
 
 import (
 	"encoding/json"
@@ -9,7 +9,7 @@ import (
 )
 
 // Message is one chat message. Content is either a string or an array of
-// {"type":"text","text":...} parts.
+// {"type":"text","text":...} blocks.
 type Message struct {
 	Role    string          `json:"role"`
 	Content json.RawMessage `json:"content"`
@@ -37,11 +37,14 @@ func (m Message) Text() string {
 	return b.String()
 }
 
-// ChatRequest is the subset of POST /v1/chat/completions the adapters honour.
-type ChatRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Stream   bool      `json:"stream"`
+// Request is the subset of POST /v1/messages the adapter honours. System is a
+// string or an array of text blocks.
+type Request struct {
+	Model     string          `json:"model"`
+	System    json.RawMessage `json:"system"`
+	Messages  []Message       `json:"messages"`
+	MaxTokens int             `json:"max_tokens"`
+	Stream    bool            `json:"stream"`
 }
 
 // Efforts are the accepted "@effort" model suffixes.
@@ -61,20 +64,12 @@ func SplitModel(s string) (model, effort string, err error) {
 	return model, effort, nil
 }
 
-// Prompt flattens a conversation into (system prompt, single user prompt).
+// Prompt flattens a request into (system prompt, single user prompt).
 // A lone user message is passed through unchanged; longer conversations are
 // rendered as a labelled transcript.
-func Prompt(msgs []Message) (system, prompt string) {
-	var sys []string
-	var turns []Message
-	for _, m := range msgs {
-		if m.Role == "system" || m.Role == "developer" {
-			sys = append(sys, m.Text())
-		} else {
-			turns = append(turns, m)
-		}
-	}
-	system = strings.Join(sys, "\n\n")
+func Prompt(r Request) (system, prompt string) {
+	system = Message{Content: r.System}.Text()
+	turns := r.Messages
 	if len(turns) == 1 && turns[0].Role == "user" {
 		return system, turns[0].Text()
 	}
@@ -90,15 +85,14 @@ func Prompt(msgs []Message) (system, prompt string) {
 	return system, b.String()
 }
 
-// Usage mirrors the OpenAI usage object.
+// Usage mirrors the Anthropic usage object.
 type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
 }
 
-// ErrorBody is the OpenAI-style error envelope.
+// ErrorBody is the Anthropic error envelope.
 func ErrorBody(msg, typ string) []byte {
-	b, _ := json.Marshal(map[string]any{"error": map[string]string{"message": msg, "type": typ}})
+	b, _ := json.Marshal(map[string]any{"type": "error", "error": map[string]string{"type": typ, "message": msg}})
 	return b
 }

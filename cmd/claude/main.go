@@ -1,4 +1,4 @@
-// Command adapter-claude exposes an OpenAI-compatible API in front of the
+// Command claude exposes an Anthropic Messages API (POST /v1/messages) in front of the
 // official `claude` CLI, one process per request. It is meant to run as a
 // sidecar of llm-proxy-manifestd, one per subscription account.
 package main

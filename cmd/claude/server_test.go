@@ -43,35 +43,36 @@ const (
 
 func post(t *testing.T, h http.Handler, body string) *httptest.ResponseRecorder {
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body)))
+	h.ServeHTTP(rr, httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body)))
 	return rr
 }
 
 func TestStreamingAndArgs(t *testing.T) {
 	bin, d := fakeCLI(t, []string{`{"type":"system","subtype":"init"}`, delta1, delta2, asst, result}, 0)
 	s := &Server{Bin: bin, ConfigDir: loggedIn(t)}
-	rr := post(t, s.Handler(), `{"model":"claude-sonnet-5-5@medium","stream":true,"messages":[{"role":"system","content":"sys"},{"role":"user","content":"hi"}]}`)
+	rr := post(t, s.Handler(), `{"model":"claude-sonnet-5-5@medium","stream":true,"system":"sys","messages":[{"role":"user","content":"hi"}]}`)
 	if rr.Code != 200 || !strings.HasPrefix(rr.Header().Get("Content-Type"), "text/event-stream") {
 		t.Fatalf("%d %v", rr.Code, rr.Header())
 	}
 	var got strings.Builder
-	done := false
+	var events []string
 	sc := bufio.NewScanner(rr.Body)
 	for sc.Scan() {
 		l := sc.Text()
-		if l == "data: [DONE]" {
-			done = true
+		if strings.HasPrefix(l, "event: ") {
+			events = append(events, l[7:])
 		}
 		if strings.HasPrefix(l, "data: {") {
 			var c struct {
-				Choices []struct{ Delta struct{ Content string } }
+				Delta struct{ Text string }
 			}
 			json.Unmarshal([]byte(l[6:]), &c)
-			got.WriteString(c.Choices[0].Delta.Content)
+			got.WriteString(c.Delta.Text)
 		}
 	}
-	if got.String() != "Hello" || !done {
-		t.Fatalf("got %q done=%v\n%s", got.String(), done, rr.Body)
+	wantEv := "message_start content_block_start ping content_block_delta content_block_delta content_block_stop message_delta message_stop"
+	if got.String() != "Hello" || strings.Join(events, " ") != wantEv {
+		t.Fatalf("got %q events=%v\n%s", got.String(), events, rr.Body)
 	}
 	argv, _ := os.ReadFile(filepath.Join(d, "argv"))
 	a := string(argv)
@@ -91,13 +92,11 @@ func TestNonStreamFallbackNoDeltas(t *testing.T) {
 	s := &Server{Bin: bin, ConfigDir: loggedIn(t)}
 	rr := post(t, s.Handler(), `{"model":"m","messages":[{"role":"user","content":"hi"}]}`)
 	var r struct {
-		Choices []struct{ Message struct{ Content string } }
-		Usage   struct {
-			PromptTokens, CompletionTokens int `json:"-"`
-		}
+		Type    string
+		Content []struct{ Text string }
 	}
 	json.Unmarshal(rr.Body.Bytes(), &r)
-	if rr.Code != 200 || r.Choices[0].Message.Content != "Hello" || !strings.Contains(rr.Body.String(), `"prompt_tokens":5`) {
+	if rr.Code != 200 || r.Type != "message" || len(r.Content) != 1 || r.Content[0].Text != "Hello" || !strings.Contains(rr.Body.String(), `"input_tokens":5`) {
 		t.Fatalf("%d %s", rr.Code, rr.Body)
 	}
 }
@@ -127,13 +126,13 @@ func TestErrors(t *testing.T) {
 	// CLI reports an auth error -> 503.
 	bin, _ := fakeCLI(t, []string{`{"type":"result","is_error":true,"result":"Not logged in · Please run /login"}`}, 1)
 	s.Bin = bin
-	if rr := post(t, s.Handler(), `{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`); rr.Code != 503 {
+	if rr := post(t, s.Handler(), `{"model":"m","stream":true,"system":"sys","messages":[{"role":"user","content":"hi"}]}`); rr.Code != 503 {
 		t.Fatalf("auth: %d %s", rr.Code, rr.Body)
 	}
 	// Generic CLI failure before output -> 502 (proxy can fail over).
 	bin, _ = fakeCLI(t, []string{`{"type":"result","is_error":true,"result":"overloaded"}`}, 1)
 	s.Bin = bin
-	if rr := post(t, s.Handler(), `{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`); rr.Code != 502 {
+	if rr := post(t, s.Handler(), `{"model":"m","stream":true,"system":"sys","messages":[{"role":"user","content":"hi"}]}`); rr.Code != 502 {
 		t.Fatalf("generic: %d", rr.Code)
 	}
 }

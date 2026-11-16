@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/lerenn/llm-proxy-manifestd/adapters/internal/oai"
+	"github.com/lerenn/llm-proxy-manifestd/internal/adapter/anthropic"
 )
 
 // Server is the OpenAI-compatible HTTP front of the Claude CLI.
@@ -25,7 +25,7 @@ type Server struct {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ready", s.ready)
-	mux.HandleFunc("POST /v1/chat/completions", s.chat)
+	mux.HandleFunc("POST /v1/messages", s.messages)
 	return mux
 }
 
@@ -45,16 +45,16 @@ func (s *Server) ready(w http.ResponseWriter, _ *http.Request) {
 func writeErr(w http.ResponseWriter, code int, typ, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_, _ = w.Write(oai.ErrorBody(msg, typ))
+	_, _ = w.Write(anthropic.ErrorBody(msg, typ))
 }
 
-func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
-	var req oai.ChatRequest
+func (s *Server) messages(w http.ResponseWriter, r *http.Request) {
+	var req anthropic.Request
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<20)).Decode(&req); err != nil {
 		writeErr(w, 400, "invalid_request_error", "invalid JSON body: "+err.Error())
 		return
 	}
-	model, effort, err := oai.SplitModel(req.Model)
+	model, effort, err := anthropic.SplitModel(req.Model)
 	if err != nil || model == "" {
 		msg := "model is required"
 		if err != nil {
@@ -63,29 +63,20 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid_request_error", msg)
 		return
 	}
-	system, prompt := oai.Prompt(req.Messages)
+	system, prompt := anthropic.Prompt(req)
 	if prompt == "" {
 		writeErr(w, 400, "invalid_request_error", "messages must contain a user message")
 		return
 	}
 	if !s.loggedIn() {
-		writeErr(w, 503, "not_logged_in", "claude is not logged in")
+		writeErr(w, 503, "authentication_error", "claude is not logged in")
 		return
 	}
 	spec := Spec{Bin: s.Bin, ConfigDir: s.ConfigDir, Model: model, Effort: effort, System: system, Prompt: prompt}
-	id := fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
-	created := time.Now().Unix()
+	id := fmt.Sprintf("msg_%d", time.Now().UnixNano())
 	run := s.run
 	if run == nil {
 		run = Run
-	}
-
-	chunk := func(delta map[string]any, finish any) []byte {
-		b, _ := json.Marshal(map[string]any{
-			"id": id, "object": "chat.completion.chunk", "created": created, "model": req.Model,
-			"choices": []any{map[string]any{"index": 0, "delta": delta, "finish_reason": finish}},
-		})
-		return b
 	}
 
 	if !req.Stream {
@@ -96,10 +87,10 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"id": id, "object": "chat.completion", "created": created, "model": req.Model,
-			"choices": []any{map[string]any{"index": 0, "finish_reason": "stop",
-				"message": map[string]any{"role": "assistant", "content": res.Text}}},
-			"usage": oai.Usage{PromptTokens: res.InputTokens, CompletionTokens: res.OutputTokens, TotalTokens: res.InputTokens + res.OutputTokens},
+			"id": id, "type": "message", "role": "assistant", "model": req.Model,
+			"content":     []any{map[string]any{"type": "text", "text": res.Text}},
+			"stop_reason": "end_turn", "stop_sequence": nil,
+			"usage": anthropic.Usage{InputTokens: res.InputTokens, OutputTokens: res.OutputTokens},
 		})
 		return
 	}
@@ -108,8 +99,10 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	// failure can still be reported as a real 5xx (which the proxy fails over on).
 	started := false
 	fl, _ := w.(http.Flusher)
-	send := func(b []byte) {
-		fmt.Fprintf(w, "data: %s\n\n", b)
+	send := func(event string, v map[string]any) {
+		v["type"] = event
+		b, _ := json.Marshal(v)
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
 		if fl != nil {
 			fl.Flush()
 		}
@@ -122,42 +115,44 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.WriteHeader(200)
-		send(chunk(map[string]any{"role": "assistant"}, nil))
+		send("message_start", map[string]any{"message": map[string]any{
+			"id": id, "type": "message", "role": "assistant", "model": req.Model,
+			"content": []any{}, "stop_reason": nil, "stop_sequence": nil,
+			"usage": anthropic.Usage{},
+		}})
+		send("content_block_start", map[string]any{"index": 0, "content_block": map[string]any{"type": "text", "text": ""}})
+		send("ping", map[string]any{})
 	}
 	res, err := run(r.Context(), spec, func(t string) {
 		start()
-		send(chunk(map[string]any{"content": t}, nil))
+		send("content_block_delta", map[string]any{"index": 0, "delta": map[string]any{"type": "text_delta", "text": t}})
 	})
 	if err != nil {
 		if !started {
 			s.fail(w, err)
 			return
 		}
-		// Mid-stream failure: surface an error event, then end without [DONE].
-		fmt.Fprintf(w, "data: %s\n\n", oai.ErrorBody(err.Error(), "upstream_error"))
+		// Mid-stream failure: surface an error event and end the stream.
+		fmt.Fprintf(w, "event: error\ndata: %s\n\n", anthropic.ErrorBody(err.Error(), "api_error"))
 		return
 	}
 	start()
-	last := chunk(map[string]any{}, "stop")
-	var m map[string]any
-	_ = json.Unmarshal(last, &m)
-	m["usage"] = oai.Usage{PromptTokens: res.InputTokens, CompletionTokens: res.OutputTokens, TotalTokens: res.InputTokens + res.OutputTokens}
-	last, _ = json.Marshal(m)
-	send(last)
-	fmt.Fprint(w, "data: [DONE]\n\n")
-	if fl != nil {
-		fl.Flush()
-	}
+	send("content_block_stop", map[string]any{"index": 0})
+	send("message_delta", map[string]any{
+		"delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil},
+		"usage": anthropic.Usage{InputTokens: res.InputTokens, OutputTokens: res.OutputTokens},
+	})
+	send("message_stop", map[string]any{})
 }
 
 func (s *Server) fail(w http.ResponseWriter, err error) {
 	var ae *AuthError
 	switch {
 	case errors.As(err, &ae):
-		writeErr(w, 503, "not_logged_in", ae.Msg)
+		writeErr(w, 503, "authentication_error", ae.Msg)
 	case errors.Is(err, context.Canceled):
-		writeErr(w, 499, "client_closed_request", "client went away")
+		writeErr(w, 499, "api_error", "client went away")
 	default:
-		writeErr(w, 502, "upstream_error", err.Error())
+		writeErr(w, 502, "api_error", err.Error())
 	}
 }

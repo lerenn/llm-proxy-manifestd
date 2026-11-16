@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Build context: the repository root (docker build -f adapters/claude/Dockerfile .).
+# Build context: the repository root (docker build -f cmd/claude/Dockerfile .).
 
 FROM --platform=$BUILDPLATFORM golang:1.23 AS build
 ARG TARGETOS
@@ -7,9 +7,10 @@ ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
-COPY adapters ./adapters
+COPY cmd/claude ./cmd/claude
+COPY internal/adapter ./internal/adapter
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go build -trimpath -ldflags "-s -w" -o /out/adapter-claude ./adapters/claude
+    go build -trimpath -ldflags "-s -w" -o /out/adapter-claude ./cmd/claude
 
 # Official Claude Code native binary (a self-contained executable: no Node.js
 # needed). Pinned by version and verified against the sha256 in the release
