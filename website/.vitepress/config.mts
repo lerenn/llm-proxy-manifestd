@@ -8,7 +8,7 @@ export default defineConfig({
   base: '/',
   cleanUrls: true,
   lastUpdated: true,
-  sitemap: { hostname: 'https://lerenn.dev' },
+  sitemap: { hostname: 'https://llm-proxy-manifestd.lerenn.dev' },
   // CNAME and other static files live in website/public.
   vite: { publicDir: '../public' },
   themeConfig: {
