@@ -1,0 +1,19 @@
+{{- range (include "llm-proxy-manifestd.providers" . | fromJsonArray) }}
+{{- $st := .provider.storage | default dict }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "llm-proxy-manifestd.fullname" $ }}-{{ .name }}
+  labels:
+    {{- include "llm-proxy-manifestd.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: provider-{{ .name }}
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with ($st.storageClass | default $.Values.providerStorage.storageClass) }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $st.size | default $.Values.providerStorage.size }}
+{{- end }}
