@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Edit this block to adjust the displayed values (real chart schema, see deploy/charts/.../values.yaml; `providers` replaces `accounts` once the rename lands).
+// Edit this block to adjust the displayed values (real chart schema, see deploy/charts/.../values.yaml).
 const values = `providers:
   claude-subscription:
     type: claude
@@ -63,7 +63,7 @@ dashboard:
         </div>
       </div>
     </div>
-    <p class="hpo-caption">Provider sidecar layout available for Claude; Codex provider is planned. See <a href="/guide/subscription-accounts">Subscription accounts</a>.</p>
+    <p class="hpo-caption">Provider sidecar layout available for Claude; Codex provider is planned. See <a href="/guide/subscription-providers">Subscription providers</a>.</p>
   </section>
 </template>
 
