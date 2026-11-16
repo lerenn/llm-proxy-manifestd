@@ -63,7 +63,7 @@ opencode  -         *
 
 - **Sidecar providers** (`claude`, `codex`) are found from the pod spec: every container whose readiness probe runs `adapter-<type> ready`. lpmctl execs that same check in the container: exit 0 is `logged-in`, any other exit `not logged-in`. If the exec itself fails (container not running, no RBAC) the status is `unknown (<reason>)`.
 - **API-key providers** (`anthropic-api`, `openai-api`) have no container and nothing to log in to; they are listed as `api-key`.
-- **Clients** come from `clients` in the proxy ConfigMap's `config.yaml` (priority `-` means the route's priority, endpoints `*` means every route). Keys are not read by `status`.
+- **Clients** come from `clients` in the proxy ConfigMap's `config.yaml` (priority `-` means the endpoint's own priority, endpoints `*` means every endpoint). Keys are not read by `status`.
 
 ## `lpmctl login <provider>`
 

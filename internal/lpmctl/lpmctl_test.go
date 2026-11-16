@@ -64,7 +64,7 @@ clients:
   opencode: {}
   ci: {priority: 10, endpoints: [fast, standard]}
   bare:
-routes: {}
+endpoints: {}
 unknown_future_key: true
 `
 
