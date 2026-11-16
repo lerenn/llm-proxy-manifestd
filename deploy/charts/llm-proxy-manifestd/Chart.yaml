@@ -1,0 +1,9 @@
+apiVersion: v2
+name: llm-proxy-manifestd
+description: Headless, manifest-driven priority/concurrency proxy for OpenAI-compatible LLM endpoints
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://llm-proxy-manifestd.lerenn.dev
+sources:
+  - https://github.com/lerenn/llm-proxy-manifestd

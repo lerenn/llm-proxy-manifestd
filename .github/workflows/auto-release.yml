@@ -1,0 +1,140 @@
+name: Auto release
+
+# Every push to main (i.e. every merged PR) that touches more than docs
+# publishes the next semver version. See website/docs/guide/releasing.md.
+#
+# Flow: version -> test -> publish (image + chart) -> tag (+ GitHub Release).
+#
+# Why the tag comes LAST: if we tagged first and publishing then failed, we
+# would have a tag with no artifacts, and a retry would compute the *next*
+# version. By publishing first, a failed run leaves no tag, so a re-run
+# recomputes the very same version and re-publishes idempotently (same image
+# tags, same chart version). The only window for "artifact without tag" is a
+# failure of the tag step itself, and a re-run closes it for the same reason.
+#
+# Why tagging and publishing live in ONE workflow: tags pushed with
+# GITHUB_TOKEN do not trigger other workflows, so release.yml (on: tags v*)
+# will NOT fire for the tag created here, which also prevents double
+# publishing. release.yml remains for manually pushed tags.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "website/**"
+
+# One release at a time so two merges cannot race for the same version.
+# Queued runs wait instead of being cancelled (a cancelled release would
+# silently skip a merge).
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Compute next version
+        id: next
+        env:
+          COMMIT_MESSAGE_SOURCE: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Bump rule, read from the merge commit message (squash-merge uses the PR title/body):
+          #   "#major" anywhere            -> major
+          #   "#minor" anywhere or "feat" subject prefix (feat:, feat(x):) -> minor
+          #   otherwise                    -> patch
+          # First release (no v* tag yet) is v0.1.0.
+          msg="$(git log -1 --format=%B "$COMMIT_MESSAGE_SOURCE")"
+          subject="$(printf '%s\n' "$msg" | head -n1)"
+          last="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)"
+          if [ -z "$last" ]; then
+            next="v0.1.0"
+          else
+            IFS=. read -r major minor patch <<< "${last#v}"
+            if printf '%s' "$msg" | grep -q '#major'; then
+              major=$((major+1)); minor=0; patch=0
+            elif printf '%s' "$msg" | grep -q '#minor' || printf '%s' "$subject" | grep -Eq '^feat(\(.+\))?:'; then
+              minor=$((minor+1)); patch=0
+            else
+              patch=$((patch+1))
+            fi
+            next="v${major}.${minor}.${patch}"
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/${next}" >/dev/null 2>&1; then
+            echo "::error::Tag ${next} already exists on origin"
+            exit 1
+          fi
+          echo "Previous: ${last:-none}  Next: ${next}"
+          echo "version=${next}" >> "$GITHUB_OUTPUT"
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests (go test -race)
+        uses: dagger/dagger-for-github@v7
+        with:
+          version: "0.21.11"
+          verb: call
+          args: test
+
+  publish:
+    needs: [version, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish image
+        uses: dagger/dagger-for-github@v7
+        with:
+          version: "0.21.11"
+          verb: call
+          args: publish-image --tag=${{ needs.version.outputs.version }} --registry-user=lerenn --registry-token=env:GITHUB_TOKEN
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish chart
+        uses: dagger/dagger-for-github@v7
+        with:
+          version: "0.21.11"
+          verb: call
+          args: publish-chart --version=${{ needs.version.outputs.version }} --registry-user=lerenn --registry-token=env:GITHUB_TOKEN
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  tag:
+    needs: [version, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create tag and GitHub Release
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" >/dev/null 2>&1; then
+            echo "::error::Tag ${VERSION} already exists; refusing to overwrite"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${VERSION}" -m "Release ${VERSION}" "${GITHUB_SHA}"
+          git push origin "refs/tags/${VERSION}"
+          gh release create "${VERSION}" --verify-tag --generate-notes --title "${VERSION}"
