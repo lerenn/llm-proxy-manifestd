@@ -61,6 +61,11 @@ spec:
             - name: config
               mountPath: /etc/llm-proxy-manifestd
               readOnly: true
+          {{- if include "llm-proxy-manifestd.clientKeysEnabled" . }}
+            - name: client-keys
+              mountPath: {{ include "llm-proxy-manifestd.clientKeysPath" . }}
+              readOnly: true
+          {{- end }}
       {{- end }}
       containers:
         - name: llm-proxy-manifestd
@@ -121,6 +126,11 @@ spec:
             - name: config
               mountPath: /etc/llm-proxy-manifestd
               readOnly: true
+          {{- if include "llm-proxy-manifestd.clientKeysEnabled" . }}
+            - name: client-keys
+              mountPath: {{ include "llm-proxy-manifestd.clientKeysPath" . }}
+              readOnly: true
+          {{- end }}
         {{- range $sidecars }}
         {{- $a := .provider }}
         {{- $ad := get $.Values.adapters .type }}
@@ -164,6 +174,12 @@ spec:
         - name: config
           configMap:
             name: {{ include "llm-proxy-manifestd.fullname" . }}
+        {{- if include "llm-proxy-manifestd.clientKeysEnabled" . }}
+        - name: client-keys
+          secret:
+            secretName: {{ include "llm-proxy-manifestd.clientKeysSecret" . }}
+            defaultMode: 0440
+        {{- end }}
         {{- if $sidecars }}
         - name: tmp
           emptyDir: {}

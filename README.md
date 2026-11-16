@@ -89,6 +89,10 @@ providers:
 
 Log in with `kubectl exec -it deploy/<release>-llm-proxy-manifestd -c claude-subscription -- claude` then `/login`. Rollouts cause a brief outage; adding a provider restarts the pod, config edits hot-reload. The adapter has not been run against a real subscription yet, and using a subscription this way may be restricted by the vendor's terms: it is for a single user with their own account, and you must check those terms yourself. See the [guide](website/docs/guide/subscription-providers.md).
 
+## Client API keys
+
+Define `clients:` in the manifest to require an API key (`x-api-key` or `Authorization: Bearer`) on `/v1/` calls; each client has an optional default `priority` and endpoint-name allow-list. The chart generates one key per client into a Secret (kept across upgrades via `lookup`; use `clientsExistingSecret` with `helm template`/Argo CD). Keys never appear in the ConfigMap. See [Client API keys](website/docs/guide/client-keys.md).
+
 ## Dashboard
 
 The binary embeds a lightweight, read-only dashboard (status, version, uptime, slots, queue depth per priority, per-endpoint in-flight/queued/requests/errors, last config reload). It is public and shows only names, upstream host names, counts and timings, never keys, URLs, prompts or headers.

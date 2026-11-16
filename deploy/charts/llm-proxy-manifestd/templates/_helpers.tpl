@@ -81,3 +81,16 @@ provider sets `port` explicitly.
 {{- end -}}
 {{- $out | toJson -}}
 {{- end -}}
+
+{{/* Client API keys: enabled when config.clients has at least one entry. */}}
+{{- define "llm-proxy-manifestd.clientKeysEnabled" -}}
+{{- if .Values.config.clients -}}true{{- end -}}
+{{- end -}}
+
+{{- define "llm-proxy-manifestd.clientKeysSecret" -}}
+{{- .Values.clientsExistingSecret | default (printf "%s-client-keys" (include "llm-proxy-manifestd.fullname" .)) -}}
+{{- end -}}
+
+{{- define "llm-proxy-manifestd.clientKeysPath" -}}
+/etc/llm-proxy-manifestd-client-keys
+{{- end -}}

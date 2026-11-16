@@ -375,3 +375,24 @@ func TestUnlimitedConcurrencyDefault(t *testing.T) {
 		}
 	}
 }
+
+func TestClientsConfig(t *testing.T) {
+	base := "server: {client_keys_dir: /keys}\npools:\n  p: {upstream_url: 'http://x', max_concurrency: 1}\nendpoints:\n  openai:\n    r: {targets: [{pool: p}]}\n"
+	c, err := Parse([]byte(base + "clients:\n  a:\n  b: {}\n  c: {priority: 10, endpoints: [r]}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Clients) != 3 || c.Clients["c"].Priority == nil || *c.Clients["c"].Priority != 10 || !c.Clients["c"].Allows("r") || c.Clients["a"].Allows("zz") != true {
+		t.Fatalf("%+v", c.Clients)
+	}
+	for name, y := range map[string]string{
+		"no dir":           "pools:\n  p: {upstream_url: 'http://x', max_concurrency: 1}\nendpoints:\n  openai:\n    r: {targets: [{pool: p}]}\nclients:\n  a:\n",
+		"unknown endpoint": base + "clients:\n  a: {endpoints: [nope]}\n",
+		"bad name":         base + "clients:\n  '../x':\n",
+		"unknown field":    base + "clients:\n  a: {bogus: 1}\n",
+	} {
+		if _, err := Parse([]byte(y)); err == nil {
+			t.Errorf("%s: expected error", name)
+		}
+	}
+}

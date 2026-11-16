@@ -96,6 +96,16 @@ adapters:
       pullPolicy: IfNotPresent
     resources: {}
 
+# Client API keys: when `config.clients` has at least one entry, every /v1/ call
+# (and /status) needs a key (`x-api-key: <key>` or `Authorization: Bearer <key>`).
+# The chart generates one random key per client name in a Secret
+# `<release>-client-keys` (kept across upgrades via `lookup`) and mounts it into
+# the proxy; keys never appear in the ConfigMap. Use `{}` (not null) for a client
+# without settings. `lookup` is empty under `helm template`/--dry-run/Argo CD, where
+# every render would regenerate keys: use the escape hatch below there.
+# Name of an existing Secret whose keys are the client names (GitOps/SOPS):
+clientsExistingSecret: ""
+
 # Rendered as config.yaml (provider pools are merged into `pools`). Changing it hot-reloads the running pods.
 config:
   server:
@@ -122,6 +132,9 @@ config:
   #       targets:
   #         - {pool: openai-a, target_model: "gpt-5.4"}
   #         - {pool: openai-b, target_model: "gpt-5.4"}
+  # clients:          # client API keys (see clientsExistingSecret above)
+  #   opencode: {}
+  #   ci: {priority: 10, endpoints: [fast]}   # optional default priority / endpoint-name allow-list
 
 # Example pool and endpoints applied only when `providers` is empty (kept so
 # that existing installs render the same endpoints). Set both to {} to disable.

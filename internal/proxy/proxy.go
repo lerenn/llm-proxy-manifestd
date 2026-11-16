@@ -40,6 +40,8 @@ type Handler struct {
 	endpoints    sync.Map // counterKey -> *routeCounters
 	rr           sync.Map // counterKey -> *atomic.Uint64 (round-robin cursor)
 	dashboard    http.Handler
+	keys         keyStore
+	clients      sync.Map // client name -> *atomic.Int64 (requests)
 }
 
 // Option customises a Handler.
@@ -92,6 +94,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.serveDashboard(w, r) {
 		return
 	}
+	r, ok := h.authorize(w, r)
+	if !ok {
+		return
+	}
 	h.mux.ServeHTTP(w, r)
 }
 
@@ -122,6 +128,10 @@ func writeProtoError(w http.ResponseWriter, proto string, code int, typ, errCode
 	switch code {
 	case http.StatusBadRequest:
 		at = "invalid_request_error"
+	case http.StatusUnauthorized:
+		at = "authentication_error"
+	case http.StatusForbidden:
+		at = "permission_error"
 	case http.StatusNotFound:
 		at = "not_found_error"
 	case http.StatusServiceUnavailable:
@@ -179,7 +189,13 @@ func (h *Handler) models(w http.ResponseWriter, r *http.Request) {
 		writeProtoError(w, proto, http.StatusServiceUnavailable, "server_error", "not_ready", "configuration not loaded")
 		return
 	}
-	names := st.Config.EndpointNames(proto)
+	cl := clientConfig(st, r)
+	names := make([]string, 0, len(st.Config.EndpointNames(proto)))
+	for _, n := range st.Config.EndpointNames(proto) {
+		if cl.Allows(n) {
+			names = append(names, n)
+		}
+	}
 	data := make([]map[string]any, 0, len(names))
 	for _, name := range names {
 		if proto == config.ProtocolAnthropic {
@@ -229,7 +245,19 @@ func (h *Handler) proxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	cl := clientConfig(st, r)
+	if !cl.Allows(model) {
+		writeProtoError(w, proto, http.StatusForbidden, "permission_error", "model_not_allowed", "this API key may not use the model '"+model+"'")
+		return
+	}
+
+	// A client's default priority overrides the endpoint/target priorities;
+	// an X-Priority header overrides both.
 	var prioOverride *int
+	if cl.Priority != nil {
+		p := *cl.Priority
+		prioOverride = &p
+	}
 	if v := r.Header.Get("X-Priority"); v != "" {
 		p, err := strconv.Atoi(strings.TrimSpace(v))
 		if err != nil {

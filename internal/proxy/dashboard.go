@@ -50,6 +50,15 @@ type dashboardState struct {
 	Totals        dashboardTotals     `json:"totals"`
 	Pools         []dashboardPool     `json:"pools"`
 	Endpoints     []dashboardEndpoint `json:"endpoints"`
+	// AuthEnabled is true when client API keys are required; Clients lists
+	// per-key request counts by key NAME (never the key).
+	AuthEnabled bool              `json:"auth_enabled"`
+	Clients     []dashboardClient `json:"clients"`
+}
+
+type dashboardClient struct {
+	Name     string `json:"name"`
+	Requests int64  `json:"requests"`
 }
 
 type dashboardConfig struct {
@@ -120,6 +129,22 @@ func (h *Handler) dashboardSnapshot() (dashboardState, bool) {
 		Config:        dashboardConfig{Generation: st.Generation, LoadedAt: st.LoadedAt.UTC()},
 		Pools:         []dashboardPool{},
 		Endpoints:     []dashboardEndpoint{},
+	}
+	out.Clients = []dashboardClient{}
+	if len(st.Config.Clients) > 0 {
+		out.AuthEnabled = true
+		names := make([]string, 0, len(st.Config.Clients))
+		for n := range st.Config.Clients {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			var c int64
+			if v, ok := h.clients.Load(n); ok {
+				c = v.(*atomic.Int64).Load()
+			}
+			out.Clients = append(out.Clients, dashboardClient{Name: n, Requests: c})
+		}
 	}
 	if h.reloadStatus != nil {
 		if rs := h.reloadStatus(); !rs.LastAttempt.IsZero() {

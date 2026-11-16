@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"sort"
 
 	"github.com/lerenn/llm-proxy-manifestd/internal/config"
 )
@@ -45,10 +47,35 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "invalid config %s: %v\n", *path, err)
 		return 1
 	}
+	warnMissingKeys(cfg, stderr)
 	for _, w := range cfg.Warnings() {
 		fmt.Fprintf(stderr, "warning: %s\n", w)
 	}
 	fmt.Fprintf(stdout, "config ok: %d pools, %d anthropic endpoints, %d openai endpoints\n",
 		len(cfg.Pools), len(cfg.Endpoints[config.ProtocolAnthropic]), len(cfg.Endpoints[config.ProtocolOpenAI]))
 	return 0
+}
+
+// warnMissingKeys prints a warning for every client without a key file in
+// server.client_keys_dir. It only warns: the directory (a mounted Secret) may
+// not exist where the checker runs. Key contents are never read or printed.
+func warnMissingKeys(cfg *config.Config, w io.Writer) {
+	dir := cfg.Server.ClientKeysDir
+	if len(cfg.Clients) == 0 {
+		return
+	}
+	if _, err := os.Stat(dir); err != nil {
+		fmt.Fprintf(w, "warning: client keys directory %s is not readable here; cannot check that every client has a key\n", dir)
+		return
+	}
+	names := make([]string, 0, len(cfg.Clients))
+	for n := range cfg.Clients {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		if st, err := os.Stat(filepath.Join(dir, n)); err != nil || st.Size() == 0 {
+			fmt.Fprintf(w, "warning: client %q has no key in %s; it will be rejected\n", n, dir)
+		}
+	}
 }
