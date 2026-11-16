@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -48,6 +49,10 @@ type Config struct {
 	Server    ServerConfig          `yaml:"server"`
 	Dashboard DashboardConfig       `yaml:"dashboard"`
 	Pools     map[string]PoolConfig `yaml:"pools"`
+	// Coordination, when set, shares slot limits and the priority queue between
+	// several proxy pods through a Valkey/Redis-protocol server. Changing it
+	// needs a restart.
+	Coordination *CoordinationConfig `yaml:"coordination"`
 	// Endpoints maps protocol ("anthropic" or "openai") to endpoint name (the
 	// client-facing model name) to its definition.
 	Endpoints map[string]map[string]Endpoint `yaml:"endpoints"`
@@ -60,6 +65,25 @@ type Config struct {
 	// file of the same name in server.client_keys_dir. Empty = auth disabled.
 	// An entry may be empty/null.
 	Clients map[string]ClientConfig `yaml:"clients"`
+}
+
+// CoordinationConfig selects the shared-state backend.
+type CoordinationConfig struct {
+	Valkey *ValkeyConfig `yaml:"valkey"`
+}
+
+// ValkeyConfig configures the Valkey/Redis coordination backend.
+type ValkeyConfig struct {
+	Address string `yaml:"address"`
+	// PasswordEnv names the environment variable holding the password; the
+	// password itself never appears in the manifest.
+	PasswordEnv string `yaml:"password_env"`
+	KeyPrefix   string `yaml:"key_prefix"`
+	// LeaseTTL is the slot lease TTL, renewed while the request runs.
+	LeaseTTL Duration `yaml:"lease_ttl"`
+	// FailMode is "open" (default: fall back to the local pool when the
+	// server is unreachable) or "closed" (reject with 503).
+	FailMode string `yaml:"fail_mode"`
 }
 
 // ClientConfig holds optional per-client settings.
@@ -241,11 +265,14 @@ func (c *Config) EndpointCount() int {
 // reported: clients of the other API get 404 endpoint_not_configured for it.
 // A config serving a single protocol produces no such warning.
 func (c *Config) Warnings() []string {
+	var out []string
+	if v := c.valkey(); v != nil && v.LeaseTTL < Duration(3*time.Second) {
+		out = append(out, fmt.Sprintf("coordination.valkey.lease_ttl %s is below 3s: a slow Valkey round trip may expire live leases", v.LeaseTTL.Std()))
+	}
 	a, o := c.Endpoints[ProtocolAnthropic], c.Endpoints[ProtocolOpenAI]
 	if len(a) == 0 || len(o) == 0 {
-		return nil
+		return out
 	}
-	var out []string
 	for _, n := range c.EndpointNames(ProtocolAnthropic) {
 		if _, ok := o[n]; !ok {
 			out = append(out, fmt.Sprintf("endpoint %q exists under anthropic but not openai: OpenAI clients get 404 for it", n))
@@ -285,7 +312,47 @@ func Parse(raw []byte) (*Config, error) {
 	return &c, nil
 }
 
+func (c *Config) valkey() *ValkeyConfig {
+	if c.Coordination == nil {
+		return nil
+	}
+	return c.Coordination.Valkey
+}
+
+func (c *Config) validateCoordination() error {
+	if c.Coordination == nil {
+		return nil
+	}
+	v := c.Coordination.Valkey
+	if v == nil {
+		return errors.New("coordination: a backend is required (coordination.valkey)")
+	}
+	if strings.TrimSpace(v.Address) == "" {
+		return errors.New("coordination.valkey.address is required")
+	}
+	if v.KeyPrefix == "" {
+		v.KeyPrefix = "lpm"
+	}
+	if v.LeaseTTL == 0 {
+		v.LeaseTTL = Duration(30 * time.Second)
+	}
+	if v.LeaseTTL < 0 {
+		return errors.New("coordination.valkey.lease_ttl must be positive")
+	}
+	switch v.FailMode {
+	case "":
+		v.FailMode = "open"
+	case "open", "closed":
+	default:
+		return fmt.Errorf("coordination.valkey.fail_mode must be open or closed, got %q", v.FailMode)
+	}
+	return nil
+}
+
 func (c *Config) validate() error {
+	if err := c.validateCoordination(); err != nil {
+		return err
+	}
 	if c.Server.Listen == "" {
 		c.Server.Listen = ":8080"
 	}
@@ -456,6 +523,8 @@ func (c *Config) validateEndpoint(label, proto string, e *Endpoint) error {
 type RuntimeState struct {
 	Config *Config
 	Pools  map[string]*pool.Pool
+	// Coordinator is the shared-state backend, nil without coordination.
+	Coordinator *pool.Coordinator
 	// Generation increments on every applied config; LoadedAt is when it was
 	// applied.
 	Generation int
@@ -523,7 +592,11 @@ func (l *Loader) Reload() (err error) {
 			"old", prev.Config.Server.Listen, "new", cfg.Server.Listen)
 		cfg.Server.Listen = prev.Config.Server.Listen
 	}
-	l.state.Store(buildState(cfg, prev))
+	if prev != nil && !reflect.DeepEqual(prev.Config.Coordination, cfg.Coordination) {
+		l.logger.Warn("coordination changed; requires restart, ignoring")
+		cfg.Coordination = prev.Config.Coordination
+	}
+	l.state.Store(buildState(cfg, prev, l.logger))
 	l.lastRaw = raw
 	l.logger.Info("config loaded", "path", l.path, "pools", len(cfg.Pools), "endpoints", cfg.EndpointCount())
 	return nil
@@ -532,11 +605,31 @@ func (l *Loader) Reload() (err error) {
 // buildState creates the runtime state, reusing pool instances (and thus
 // their semaphores and queues) from prev when the upstream is unchanged.
 // Concurrency and aging changes are applied to the live pool.
-func buildState(cfg *Config, prev *RuntimeState) *RuntimeState {
+func buildState(cfg *Config, prev *RuntimeState, logger *slog.Logger) *RuntimeState {
 	aging := cfg.Server.AgingInterval.Std()
 	st := &RuntimeState{Config: cfg, Pools: make(map[string]*pool.Pool, len(cfg.Pools)), Generation: 1, LoadedAt: time.Now()}
 	if prev != nil {
 		st.Generation = prev.Generation + 1
+	}
+	switch {
+	case prev != nil:
+		st.Coordinator = prev.Coordinator
+	case cfg.valkey() != nil:
+		v := cfg.valkey()
+		st.Coordinator = pool.NewCoordinator(pool.CoordConfig{
+			Address: v.Address, Password: os.Getenv(v.PasswordEnv), KeyPrefix: v.KeyPrefix,
+			LeaseTTL: v.LeaseTTL.Std(), FailClosed: v.FailMode == "closed", Logger: logger,
+		})
+	}
+	newPool := func(name, group string, max int) *pool.Pool {
+		if st.Coordinator == nil {
+			return pool.New(max, aging)
+		}
+		key := "pool:" + name
+		if group != "" {
+			key = "group:" + group
+		}
+		return pool.NewShared(max, aging, st.Coordinator, key)
 	}
 	groups := map[string]*pool.Pool{} // instances shared by concurrency groups
 	for _, name := range sortedPoolNames(cfg.Pools) {
@@ -559,7 +652,7 @@ func buildState(cfg *Config, prev *RuntimeState) *RuntimeState {
 			if p != nil {
 				p.Resize(pc.MaxConcurrency, aging)
 			} else {
-				p = pool.New(pc.MaxConcurrency, aging)
+				p = newPool(name, g, pc.MaxConcurrency)
 			}
 			groups[g] = p
 			st.Pools[name] = p
@@ -575,7 +668,7 @@ func buildState(cfg *Config, prev *RuntimeState) *RuntimeState {
 				}
 			}
 		}
-		st.Pools[name] = pool.New(pc.MaxConcurrency, aging)
+		st.Pools[name] = newPool(name, "", pc.MaxConcurrency)
 	}
 	return st
 }

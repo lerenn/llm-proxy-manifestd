@@ -21,6 +21,25 @@ jobs:
           verb: call
           args: test
 
+  valkey:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      valkey:
+        image: valkey/valkey:8
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "valkey-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Coordination tests against a real Valkey
+        env:
+          LPM_TEST_VALKEY: 127.0.0.1:6379
+        run: go test -race -count=1 -run 'Shared' ./internal/pool
+
   adapter-image:
     runs-on: ubuntu-latest
     timeout-minutes: 20
