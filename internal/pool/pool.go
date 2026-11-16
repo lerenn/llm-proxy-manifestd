@@ -12,7 +12,9 @@ import (
 
 // Stats is a point-in-time snapshot of a pool.
 type Stats struct {
+	// MaxConcurrency is the slot limit; 0 together with Unlimited means no limit.
 	MaxConcurrency int   `json:"max_concurrency"`
+	Unlimited      bool  `json:"unlimited"`
 	Active         int   `json:"active_slots"`
 	QueueDepth     int   `json:"queue_depth"`
 	TotalServed    int64 `json:"total_served"`
@@ -41,10 +43,16 @@ type waiter struct {
 	granted  bool
 }
 
-// New creates a pool with the given maximum concurrency (min 1) and aging
-// interval (0 disables aging).
+// Unlimited is the maxConcurrency value meaning "no slot limit": every
+// Acquire succeeds immediately and nothing is ever queued (slots are still
+// counted as active for statistics and multi-pool selection).
+const Unlimited = 0
+
+// New creates a pool with the given maximum concurrency and aging interval
+// (0 disables aging). maxConcurrency == Unlimited (0) means no limit; negative
+// values are clamped to 1.
 func New(maxConcurrency int, aging time.Duration) *Pool {
-	if maxConcurrency < 1 {
+	if maxConcurrency < 0 {
 		maxConcurrency = 1
 	}
 	p := &Pool{max: maxConcurrency, aging: aging, now: time.Now}
@@ -55,16 +63,18 @@ func New(maxConcurrency int, aging time.Duration) *Pool {
 // Resize updates the concurrency limit and aging interval on a live pool.
 // Raising the limit immediately hands slots to queued waiters; lowering it
 // never revokes slots already held, it only stops new grants until the
-// active count drops below the new limit.
+// active count drops below the new limit. Switching to Unlimited releases
+// every queued waiter at once; switching back to a limit applies it to new
+// acquisitions (slots already held are kept).
 func (p *Pool) Resize(maxConcurrency int, aging time.Duration) {
-	if maxConcurrency < 1 {
+	if maxConcurrency < 0 {
 		maxConcurrency = 1
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.max = maxConcurrency
 	p.aging = aging
-	for p.active < p.max && len(p.queue.items) > 0 {
+	for (p.max == Unlimited || p.active < p.max) && len(p.queue.items) > 0 {
 		p.active++
 		p.grantNextLocked()
 	}
@@ -79,7 +89,7 @@ func (p *Pool) Acquire(ctx context.Context, priority int) (release func(), err e
 	}
 
 	p.mu.Lock()
-	if p.active < p.max && len(p.queue.items) == 0 {
+	if p.hasFreeLocked() && len(p.queue.items) == 0 {
 		p.active++
 		p.mu.Unlock()
 		p.served.Add(1)
@@ -118,7 +128,7 @@ func (p *Pool) Acquire(ctx context.Context, priority int) (release func(), err e
 // queued. It never waits; ok is false when no slot was taken.
 func (p *Pool) TryAcquire() (release func(), ok bool) {
 	p.mu.Lock()
-	if p.active < p.max && len(p.queue.items) == 0 {
+	if p.hasFreeLocked() && len(p.queue.items) == 0 {
 		p.active++
 		p.mu.Unlock()
 		p.served.Add(1)
@@ -134,6 +144,7 @@ func (p *Pool) Stats() Stats {
 	defer p.mu.Unlock()
 	return Stats{
 		MaxConcurrency: p.max,
+		Unlimited:      p.max == Unlimited,
 		Active:         p.active,
 		QueueDepth:     len(p.queue.items),
 		TotalServed:    p.served.Load(),
@@ -151,6 +162,8 @@ func (p *Pool) QueueByPriority() map[int]int {
 	return out
 }
 
+func (p *Pool) hasFreeLocked() bool { return p.max == Unlimited || p.active < p.max }
+
 func (p *Pool) releaser() func() {
 	var once sync.Once
 	return func() { once.Do(p.release) }
@@ -159,7 +172,7 @@ func (p *Pool) releaser() func() {
 func (p *Pool) release() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if len(p.queue.items) > 0 && p.active <= p.max {
+	if len(p.queue.items) > 0 && (p.max == Unlimited || p.active <= p.max) {
 		// Direct handoff: the slot stays counted as active.
 		p.grantNextLocked()
 		return

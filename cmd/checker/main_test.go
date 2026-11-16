@@ -68,3 +68,14 @@ func TestCheckerUsageAndMissingFile(t *testing.T) {
 		t.Fatal("want exit 1 for missing file")
 	}
 }
+
+func TestCheckerUnlimitedAndOmitted(t *testing.T) {
+	for _, y := range []string{"max_concurrency: 0", ""} {
+		if code, _, _ := check(t, "pools:\n  p: {upstream_url: 'http://x', "+y+"}\n"); code != 0 {
+			t.Fatalf("%q must be valid (unlimited), code=%d", y, code)
+		}
+	}
+	if code, _, _ := check(t, "pools:\n  p: {upstream_url: 'http://x', max_concurrency: -1}\n"); code == 0 {
+		t.Fatal("negative must be invalid")
+	}
+}

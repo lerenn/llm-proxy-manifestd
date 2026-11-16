@@ -51,7 +51,10 @@ provider sets `port` explicitly.
 {{- if not (regexMatch "^[a-z]([-a-z0-9]{0,28}[a-z0-9])?$" $name) -}}
 {{- fail (printf "providers.%s: name must be a DNS label of at most 30 characters (lowercase letters, digits, '-')" $name) -}}
 {{- end -}}
-{{- $entry := dict "name" $name "type" $type "maxConcurrency" (int ($a.maxConcurrency | default 4)) "provider" $a -}}
+{{- if lt (int ($a.maxConcurrency | default 0)) 0 -}}
+{{- fail (printf "providers.%s: maxConcurrency must be >= 0 (0 or omitted = unlimited)" $name) -}}
+{{- end -}}
+{{- $entry := dict "name" $name "type" $type "maxConcurrency" (int ($a.maxConcurrency | default 0)) "provider" $a -}}
 {{- if or (eq $type "claude") (eq $type "codex") -}}
 {{- $_ := set $entry "sidecar" true -}}
 {{- $_ := set $entry "protocol" (ternary "anthropic" "openai" (eq $type "claude")) -}}

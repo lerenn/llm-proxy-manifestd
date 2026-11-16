@@ -95,9 +95,11 @@ func (d DashboardConfig) PathPrefix() string {
 
 // PoolConfig describes one upstream account.
 type PoolConfig struct {
-	UpstreamURL    string `yaml:"upstream_url"`
-	APIKey         string `yaml:"api_key"`
-	MaxConcurrency int    `yaml:"max_concurrency"`
+	UpstreamURL string `yaml:"upstream_url"`
+	APIKey      string `yaml:"api_key"`
+	// MaxConcurrency >= 1 limits parallel requests; 0 (also when omitted) means
+	// unlimited: no slot limit, no queue. Negative values are invalid.
+	MaxConcurrency int `yaml:"max_concurrency"`
 	// Protocol is the API the upstream speaks: "openai" (default) or
 	// "anthropic". It decides which endpoints may target the pool and how
 	// the API key is injected.
@@ -273,8 +275,8 @@ func (c *Config) validate() error {
 		return errors.New("at least one pool is required")
 	}
 	for name, p := range c.Pools {
-		if p.MaxConcurrency < 1 {
-			return fmt.Errorf("pool %q: max_concurrency must be >= 1", name)
+		if p.MaxConcurrency < 0 {
+			return fmt.Errorf("pool %q: max_concurrency must be >= 0 (0 = unlimited)", name)
 		}
 		switch p.Protocol {
 		case "":

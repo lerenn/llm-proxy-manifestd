@@ -47,6 +47,10 @@ helm upgrade llm-proxy oci://ghcr.io/lerenn/charts/llm-proxy-manifestd -f values
 
 Clients then talk OpenAI-compatible HTTP to the service and use an endpoint name (e.g. `codex-interactive`) as the model. `GET /v1/models` lists the endpoint names.
 
+## Concurrency limit (default: unlimited)
+
+`max_concurrency` limits parallel requests per pool. **Omitting it, or setting `0`, means unlimited** (no queue, requests go straight through); this is a change from earlier releases, where it was required and had to be >= 1. Negative values are invalid. The same applies to `maxConcurrency` on chart `providers`. Set a positive number wherever you rely on a limit.
+
 ## Endpoints, protocols and multi-pool routing
 
 Endpoints are declared per protocol: `endpoints.anthropic` serves `/v1/messages` (and `/v1/messages/count_tokens`), `endpoints.openai` every other `/v1/` path. The endpoint name is the `model` clients send; a name missing for the request's protocol returns 404 `endpoint_not_configured` in that API's error shape. There is no protocol translation, and every target pool must declare the endpoint's `protocol` (`anthropic` or `openai`, default `openai`).

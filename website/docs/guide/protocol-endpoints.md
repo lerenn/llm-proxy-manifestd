@@ -35,7 +35,7 @@ In the Helm chart the same block goes under `config.endpoints`.
 | `targets[].target_model` | Model sent upstream for this target, an opaque string (`@low`/`@medium`/`@high` suffixes mean nothing to the proxy). Empty keeps the client's `model`. |
 | `targets[].priority` | Optional queue priority for requests queued on this target; overrides the endpoint `priority`. |
 
-- `pools[].protocol` is `anthropic` or `openai` (default `openai`); `max_concurrency` is required (>= 1).
+- `pools[].protocol` is `anthropic` or `openai` (default `openai`); `max_concurrency` is optional (a positive limit; `0` or omitted = unlimited, negative rejected).
 - Validation rejects unknown pools, pools of the other protocol, an empty `targets` list, duplicate `{pool, target_model}` pairs, unknown modes and unknown keys (for example `pools:` instead of `targets:`).
 - The top-level `routes:` key of earlier versions **is removed**: a manifest still using it fails to load with an error showing the new form. Migration: `routes.<name>.endpoints.<protocol>: {pools: [a, b], target_model: m, priority: p}` becomes `endpoints.<protocol>.<name>: {priority: p, targets: [{pool: a, target_model: m}, {pool: b, target_model: m}]}`; the old route shorthand (`pool`/`pools` directly on the route) was the `openai` endpoint.
 
