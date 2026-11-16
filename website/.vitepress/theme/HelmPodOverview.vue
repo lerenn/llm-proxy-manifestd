@@ -1,18 +1,23 @@
 <script setup lang="ts">
-// Edit this block to adjust the displayed values (planned schema, not yet released).
+// Edit this block to adjust the displayed values (real chart schema, see deploy/charts/.../values.yaml).
 const values = `accounts:
-  claude-subscription: { type: claude, maxConcurrency: 4 }
-  codex-subscription:  { type: codex,  maxConcurrency: 4 }
+  claude-subscription:
+    type: claude
+    maxConcurrency: 4
 config:
   routes:
     standard-medium:
-      pools: [claude-subscription]
-      target_model: "claude-sonnet-5-5@medium"
-      priority: 50
+      endpoints:
+        anthropic:
+          pools: [claude-subscription]
+          target_model: "claude-sonnet-5-5@medium"
+          priority: 50
     premium-high:
-      pools: [claude-subscription]
-      target_model: "claude-opus-5-5@high"
-      priority: 80
+      endpoints:
+        anthropic:
+          pools: [claude-subscription]
+          target_model: "claude-opus-5-5@high"
+          priority: 80
 dashboard:
   ingress:
     enabled: true
@@ -29,7 +34,7 @@ dashboard:
       <div class="hpo-col">
         <h3 class="hpo-title">Resulting pod</h3>
         <div class="hpo-diagram" role="img"
-          aria-label="Clients call the proxy container on port 8080. The proxy forwards to claude and codex sidecars on localhost, which call the vendor APIs.">
+          aria-label="Clients call the proxy container on port 8080. The proxy forwards to the claude sidecar on localhost (a codex sidecar is planned), which calls the vendor API.">
           <div class="hpo-row hpo-ext">Clients (coding agents)</div>
           <div class="hpo-arrow">&darr; <small>:8080</small></div>
           <div class="hpo-pod">
@@ -43,14 +48,13 @@ dashboard:
             <div class="hpo-sidecars">
               <div class="hpo-box">
                 <b>claude-subscription</b>
-                <small>sidecar &middot; 127.0.0.1:&lt;auto-assigned&gt;</small>
+                <small>sidecar &middot; 127.0.0.1:9100</small>
                 <small>login on PVC</small>
               </div>
               <div class="hpo-box hpo-exp">
-                <b>codex-subscription</b>
-                <small>sidecar &middot; 127.0.0.1:&lt;auto-assigned&gt;</small>
-                <small>login on PVC</small>
-                <em>experimental / planned</em>
+                <b>codex sidecar</b>
+                <small>not implemented</small>
+                <em>planned</em>
               </div>
             </div>
           </div>
@@ -59,7 +63,7 @@ dashboard:
         </div>
       </div>
     </div>
-    <p class="hpo-caption">Planned sidecar layout; the values schema shown is not released yet.</p>
+    <p class="hpo-caption">Sidecar layout available for Claude; Codex is planned. See <a href="/guide/subscription-accounts">Subscription accounts</a>.</p>
   </section>
 </template>
 
