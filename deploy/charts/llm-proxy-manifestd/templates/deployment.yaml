@@ -34,8 +34,14 @@ spec:
       labels:
         {{- include "llm-proxy-manifestd.selectorLabels" . | nindent 8 }}
     spec:
-      {{- if $sidecars }}
+      {{- if include "llm-proxy-manifestd.keysManager" . }}
+      serviceAccountName: {{ include "llm-proxy-manifestd.fullname" . }}
+      {{- end }}
+      {{- if or $sidecars (include "llm-proxy-manifestd.keysManager" .) }}
+      # No API token in the main/adapter containers; keys-manager gets its own projected one.
       automountServiceAccountToken: false
+      {{- end }}
+      {{- if $sidecars }}
       securityContext:
         runAsNonRoot: true
         fsGroup: 10001
@@ -43,8 +49,43 @@ spec:
           type: RuntimeDefault
       {{- end }}
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
-      {{- if $providers }}
+      {{- if or $providers (include "llm-proxy-manifestd.keysManager" .) }}
       initContainers:
+        {{- if include "llm-proxy-manifestd.keysManager" . }}
+        # Creates the client keys Secret if absent and adds a key for each client without one
+        # (never overwrites; drops keys of removed clients). Runs before the proxy starts.
+        - name: keys-manager
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/keys-manager"]
+          args:
+            - init
+            - --config=/etc/llm-proxy-manifestd/config.yaml
+            - --secret={{ include "llm-proxy-manifestd.clientKeysSecret" . }}
+            - --namespace={{ .Release.Namespace }}
+            {{- range $k, $v := (include "llm-proxy-manifestd.labels" . | fromYaml) }}
+            - --label={{ $k }}={{ $v }}
+            {{- end }}
+          securityContext:
+            runAsUser: 65532
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/llm-proxy-manifestd
+              readOnly: true
+            - name: kube-api-access
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+        {{- end }}
+        {{- if $providers }}
         # Fail the rollout early on an invalid config (pools, endpoints).
         - name: check-config
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
@@ -66,6 +107,7 @@ spec:
               mountPath: {{ include "llm-proxy-manifestd.clientKeysPath" . }}
               readOnly: true
           {{- end }}
+        {{- end }}
       {{- end }}
       containers:
         - name: llm-proxy-manifestd
@@ -179,6 +221,23 @@ spec:
           secret:
             secretName: {{ include "llm-proxy-manifestd.clientKeysSecret" . }}
             defaultMode: 0440
+        {{- end }}
+        {{- if include "llm-proxy-manifestd.keysManager" . }}
+        # API token for the keys-manager init container ONLY.
+        - name: kube-api-access
+          projected:
+            defaultMode: 0444
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items: [{key: ca.crt, path: ca.crt}]
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef: {fieldPath: metadata.namespace}
         {{- end }}
         {{- if $sidecars }}
         - name: tmp

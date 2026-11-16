@@ -91,7 +91,7 @@ Log in with `kubectl exec -it deploy/<release>-llm-proxy-manifestd -c claude-sub
 
 ## Client API keys
 
-Define `clients:` in the manifest to require an API key (`x-api-key` or `Authorization: Bearer`) on `/v1/` calls; each client has an optional default `priority` and endpoint-name allow-list. The chart generates one key per client into a Secret (kept across upgrades via `lookup`; use `clientsExistingSecret` with `helm template`/Argo CD). Keys never appear in the ConfigMap. See [Client API keys](website/docs/guide/client-keys.md).
+Define `clients:` in the manifest to require an API key (`x-api-key` or `Authorization: Bearer`) on `/v1/` calls; each client has an optional default `priority` and endpoint-name allow-list. The chart runs a `keys-manager` init container that creates one key per client in a Secret (never overwriting existing keys; works with Argo CD; a new client gets its key at the next pod restart; `clientsExistingSecret` to bring your own). Keys never appear in the ConfigMap. See [Client API keys](website/docs/guide/client-keys.md).
 
 ## lpmctl (CLI)
 

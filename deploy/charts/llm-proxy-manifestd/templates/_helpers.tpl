@@ -136,3 +136,8 @@ provider sets `port` explicitly.
 {{- define "llm-proxy-manifestd.clientKeysPath" -}}
 /etc/llm-proxy-manifestd-client-keys
 {{- end -}}
+
+{{/* The chart creates and maintains the client keys Secret (init container + RBAC). */}}
+{{- define "llm-proxy-manifestd.keysManager" -}}
+{{- if and (include "llm-proxy-manifestd.clientKeysEnabled" .) (not .Values.clientsExistingSecret) -}}true{{- end -}}
+{{- end -}}

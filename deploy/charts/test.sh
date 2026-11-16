@@ -49,4 +49,29 @@ config: {endpoints: {anthropic: {fast: {targets: [{pool: nm-anthropic, target_mo
 helm template r "$CHART" -f "$f" -s templates/configmap.yaml | sed -n '/config.yaml: |/,$p' | sed '1d;s/^    //' > "$tmp/config.yaml"
 PROVIDER_NM_API_KEY=x go run ./cmd/checker -f "$tmp/config.yaml" | grep -q '1 concurrency groups' && ok checker-accepts-rendered || fail checker-accepts-rendered
 
+# --- client keys: keys-manager init container + RBAC ---
+full() { helm template r "$CHART" -f "$1" 2>&1; }
+cl=$(v m "config: {clients: {a: {}, b: {}}}")
+out=$(full "$cl") || fail "clients render"
+init=$(awk '/initContainers:/{f=1} /^      containers:/{f=0} f' <<<"$out")
+grep -q 'name: keys-manager' <<<"$out" && grep -q 'command: \["/keys-manager"\]' <<<"$out" && grep -q -- '- init' <<<"$out" && ok keysmgr-init-present || fail keysmgr-init-present
+grep -q 'kind: Role$' <<<"$out" && grep -q 'kind: RoleBinding' <<<"$out" && grep -q 'kind: ServiceAccount' <<<"$out" && ok keysmgr-rbac || fail keysmgr-rbac
+grep -qE 'resourceNames: \["r-llm-proxy-manifestd-client-keys"\]' <<<"$out" && grep -q 'verbs: \["create"\]' <<<"$out" && ok keysmgr-rbac-scoped || fail keysmgr-rbac-scoped
+! grep -q 'kind: Secret' <<<"$out" && ok no-lookup-secret || fail no-lookup-secret
+[ ! -e "$CHART/templates/client-keys-secret.yaml" ] && ! grep -rq 'lookup' "$CHART/templates" && ok lookup-template-gone || fail lookup-template-gone
+# token only in the init container
+[ "$(grep -c 'kube-api-access' <<<"$out")" -eq 2 ] && grep -q 'automountServiceAccountToken: false' <<<"$out" && ok token-only-in-init || fail token-only-in-init
+sec=$(awk '/- name: keys-manager/{f=1} /- name: llm-proxy-manifestd$/{f=0} f' <<<"$out")
+for p in 'readOnlyRootFilesystem: true' 'runAsNonRoot: true' 'drop: \["ALL"\]'; do grep -qE "$p" <<<"$sec" || fail "keysmgr-hardening ($p)"; done; ok keysmgr-hardening
+# token stays out of the main container with sidecar providers
+out2=$(full "$(v n "config: {clients: {a: {}}}
+providers: {c: {type: claude}}")") && [ "$(grep -c 'kube-api-access' <<<"$out2")" -eq 2 ] && grep -q 'automountServiceAccountToken: false' <<<"$out2" && ok token-only-in-init-sidecars || fail token-only-in-init-sidecars
+# escape hatch
+out3=$(full "$(v o "clientsExistingSecret: mine
+config: {clients: {a: {}}}")")
+! grep -qE 'keys-manager|kind: Role|kind: ServiceAccount|kube-api-access' <<<"$out3" && grep -q 'secretName: mine' <<<"$out3" && ok existing-secret-no-init || fail existing-secret-no-init
+# no clients: nothing
+out4=$(full "$(v p "{}")")
+! grep -qE 'keys-manager|kind: Role|client-keys' <<<"$out4" && ok no-clients-no-init || fail no-clients-no-init
+
 [ "$fails" -eq 0 ] || { echo "$fails failure(s)"; exit 1; }

@@ -31,10 +31,12 @@ Empty or omitted `clients` means authentication is disabled (the previous behavi
 
 With the chart, set `config.clients` as above. The chart:
 
-- generates one random key per client (`llmp_` plus 40 random characters) in a Secret named `<release>-client-keys` on first install;
-- reuses the existing values on `helm upgrade` through `lookup`, adds keys for new names and drops removed ones;
+- runs a `keys-manager` init container (same image, binary `/keys-manager init`) before the proxy starts. It creates the Secret `<release>-client-keys` if absent and adds one random key (`llmp_` plus 40 random characters) for each client that has none. It never overwrites an existing key, drops the keys of clients removed from `config.clients`, retries on update conflicts and is idempotent. It logs client names only, never keys;
+- creates a ServiceAccount, a Role (`create` on secrets, plus `get`/`update`/`patch` limited by `resourceNames` to that one Secret) and a RoleBinding. The API token is mounted **only** in the init container (projected volume); the proxy and adapter containers have no Kubernetes API token;
 - mounts the Secret read-only into the proxy and the `check-config` init container, and renders `server.client_keys_dir` for you;
-- keeps the Secret on uninstall (`helm.sh/resource-policy: keep`).
+- does not render the Secret itself: it is not a Helm/Argo CD object, so it is never pruned, diffed or regenerated, and it survives uninstall.
+
+A client added to `config.clients` later gets its key at the **next pod restart** (the init container only runs then): `kubectl rollout restart deploy/<release>-llm-proxy-manifestd`.
 
 Read a key:
 
@@ -44,11 +46,11 @@ kubectl get secret <release>-llm-proxy-manifestd-client-keys -o jsonpath='{.data
 
 (The Secret is named `<release>-client-keys` when the release name contains the chart name, otherwise `<release>-llm-proxy-manifestd-client-keys`; `kubectl get secret | grep client-keys` finds it.)
 
-Rotate one key: delete that key from the Secret (`kubectl patch secret ... --type=json -p '[{"op":"remove","path":"/data/opencode"}]'`) and run `helm upgrade`; a new key is generated for that name.
+Rotate one key: delete that key from the Secret (`kubectl patch secret ... --type=json -p '[{"op":"remove","path":"/data/opencode"}]'`) and restart the pod; a new key is generated for that name.
 
-### `helm template`, dry-run and Argo CD
+### GitOps / Argo CD / `helm template`
 
-`lookup` returns nothing when Helm does not talk to the cluster: `helm template`, `helm install --dry-run`, `helm lint` in CI, and **Argo CD** (it renders with `helm template`). In those cases every render invents new random keys, which is fine for CI rendering and the checker but would rotate your keys on every sync under Argo CD. For GitOps, create the Secret yourself (for example with SOPS) and point the chart at it:
+Because the keys are created at runtime by the init container (not by Helm `lookup`), `helm template`, `--dry-run` and Argo CD work without regenerating keys. If you prefer to own the Secret yourself (for example with SOPS), set `clientsExistingSecret`: the init container and the RBAC are then not rendered.
 
 ```yaml
 clientsExistingSecret: my-client-keys   # keys of the Secret = client names
@@ -63,6 +65,6 @@ kubectl create secret generic my-client-keys --from-literal=opencode="llmp_$(ope
 
 ## Unverified
 
-- The `lookup` reuse path (keys surviving `helm upgrade`, adding and dropping names) was only checked by reading the template and rendering offline: I could not run it against a live cluster.
+- The `keys-manager` init container is unit-tested against a fake API server and the chart rendering is tested offline; it was not run against a real cluster (RBAC, projected token, in-cluster CA).
 - The kubelet's Secret refresh timing and hot reload of the mounted keys were not exercised in a cluster (the reload logic is unit-tested against a directory).
 - `endpoints` is an allow-list of endpoint names (protocol-agnostic: allowing `fast` allows both `endpoints.anthropic.fast` and `endpoints.openai.fast`).
