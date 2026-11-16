@@ -10,44 +10,42 @@
 </head>
 <body>
 <header>
+  <button id="nav-toggle" class="nav-toggle" type="button" aria-controls="sidebar" aria-expanded="false" aria-label="Toggle navigation">☰</button>
   <h1>llm-proxy-manifestd</h1>
   <p id="status" class="badge" role="status" aria-live="polite">Loading…</p>
 </header>
 <div id="error" class="error" role="alert" hidden></div>
-<main>
-  <section aria-label="Overview" class="cards">
-    <div class="card"><h2>Version</h2><p id="version" class="big">–</p></div>
-    <div class="card"><h2>Uptime</h2><p id="uptime" class="big">–</p></div>
-    <div class="card"><h2>Slots used</h2><p id="slots" class="big">–</p><div class="meter" aria-hidden="true"><div id="slots-bar"></div></div></div>
-    <div class="card"><h2>Queued</h2><p id="queued" class="big">–</p></div>
-    <div class="card"><h2>In flight</h2><p id="inflight" class="big">–</p></div>
-    <div class="card"><h2>Requests / errors</h2><p id="totals" class="big">–</p></div>
-    <div class="card"><h2>Config</h2><p id="config" class="big">–</p><p id="reload" class="sub"></p></div>
-  </section>
+<div class="layout">
+  <nav id="sidebar" class="sidebar" aria-label="Views">
+    <ul>
+      <li><a href="#/overview" data-view="overview">Overview</a></li>
+      <li><a href="#/pools" data-view="pools">Pools</a></li>
+      <li><a href="#/endpoints" data-view="endpoints">Endpoints</a></li>
+    </ul>
+  </nav>
+  <main id="main" tabindex="-1">
+    <section id="view-overview" data-view="overview" aria-labelledby="overview-h">
+      <h2 id="overview-h">Overview</h2>
+      <dl class="list" id="overview"></dl>
+    </section>
 
-  <section aria-labelledby="pools-h">
-    <h2 id="pools-h">Pools</h2>
-    <div class="scroll"><table>
-      <thead><tr><th scope="col">Pool</th><th scope="col">Upstream</th><th scope="col" class="num">Slots</th><th scope="col" class="num">Queued</th><th scope="col">Queue by priority</th><th scope="col" class="num">Served</th></tr></thead>
-      <tbody id="pools"></tbody>
-    </table></div>
-  </section>
+    <section id="view-pools" data-view="pools" aria-labelledby="pools-h" hidden>
+      <h2 id="pools-h">Pools</h2>
+      <div class="scroll"><table>
+        <thead><tr><th scope="col">Pool</th><th scope="col">Protocol</th><th scope="col">Upstream</th><th scope="col">Concurrency group</th><th scope="col" class="num">Slots</th><th scope="col" class="num">Queued</th><th scope="col">Queue by priority</th><th scope="col" class="num">Served</th></tr></thead>
+        <tbody id="pools"></tbody>
+      </table></div>
+    </section>
 
-  <section aria-labelledby="endpoints-h">
-    <h2 id="endpoints-h">Endpoints</h2>
-    <div class="scroll"><table>
-      <thead><tr><th scope="col">Endpoint</th><th scope="col">Protocol</th><th scope="col">Mode</th><th scope="col">Targets</th><th scope="col">Upstreams</th><th scope="col" class="num">Priority</th><th scope="col" class="num">In flight</th><th scope="col" class="num">Queued</th><th scope="col" class="num">Requests</th><th scope="col" class="num">Errors</th></tr></thead>
-      <tbody id="endpoints"></tbody>
-    </table></div>
-  </section>
-  <section aria-labelledby="clients-h" id="clients-sec" hidden>
-    <h2 id="clients-h">Clients (API keys)</h2>
-    <div class="scroll"><table>
-      <thead><tr><th scope="col">Client</th><th scope="col" class="num">Requests</th></tr></thead>
-      <tbody id="clients"></tbody>
-    </table></div>
-  </section>
-</main>
+    <section id="view-endpoints" data-view="endpoints" aria-labelledby="endpoints-h" hidden>
+      <h2 id="endpoints-h">Endpoints</h2>
+      <div class="scroll"><table>
+        <thead><tr><th scope="col">Endpoint</th><th scope="col">Protocol</th><th scope="col">Mode</th><th scope="col" class="num">Priority</th><th scope="col">Targets (pool → model)</th><th scope="col">Upstreams</th><th scope="col" class="num">In flight</th><th scope="col" class="num">Queued</th><th scope="col" class="num">Requests</th><th scope="col" class="num">Errors</th></tr></thead>
+        <tbody id="endpoints"></tbody>
+      </table></div>
+    </section>
+  </main>
+</div>
 <footer><span id="updated">–</span> · read-only · counters reset on restart</footer>
 <script src="app.js"></script>
 </body>

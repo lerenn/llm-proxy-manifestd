@@ -45,42 +45,80 @@
     el.className = 'badge ' + cls;
   }
 
+  function row(dl, k, v, sub) {
+    var d = document.createElement('div');
+    var dt = document.createElement('dt'); dt.textContent = k;
+    var dd = document.createElement('dd'); dd.textContent = v;
+    if (sub) { var sp = document.createElement('span'); sp.className = 'sub'; sp.textContent = sub; dd.appendChild(sp); }
+    d.appendChild(dt); d.appendChild(dd); dl.appendChild(d);
+  }
+
   function render(s) {
     var now = new Date(s.now);
     $('error').hidden = true;
     setStatus(s.status === 'ok' ? 'Healthy' : 'Degraded: last config reload failed', s.status === 'ok' ? 'ok' : 'warn');
-    $('version').textContent = s.version;
-    $('uptime').textContent = dur(s.uptime_seconds);
     var t = s.totals;
-    $('slots').textContent = t.active_slots + ' / ' + (t.unlimited ? 'unlimited' : t.slots);
-    $('slots-bar').style.width = (!t.unlimited && t.slots ? Math.min(100, 100 * t.active_slots / t.slots) : 0) + '%';
-    $('queued').textContent = n(t.queued);
-    $('inflight').textContent = n(t.in_flight);
-    $('totals').textContent = n(t.requests) + ' / ' + n(t.errors);
-    $('config').textContent = 'gen ' + s.config.generation;
+    var pools = s.pools || [], eps = s.endpoints || [], clients = s.clients || [];
+    var groups = {};
+    pools.forEach(function (p) { if (p.concurrency_group) groups[p.concurrency_group] = true; });
     var r = 'applied ' + ago(s.config.loaded_at, now);
     if (s.config.last_reload_attempt) {
       r += '; last check ' + ago(s.config.last_reload_attempt, now);
       if (s.config.last_reload_failed) r += ' (rejected, previous config kept)';
     }
-    $('reload').textContent = r;
+    var dl = $('overview');
+    dl.replaceChildren();
+    row(dl, 'Version', s.version);
+    row(dl, 'Uptime', dur(s.uptime_seconds));
+    row(dl, 'Pools', n(pools.length));
+    row(dl, 'Endpoints', n(eps.length));
+    row(dl, 'Concurrency groups', n(Object.keys(groups).length));
+    row(dl, 'Requests in flight', n(t.in_flight));
+    row(dl, 'Queued requests', n(t.queued));
+    row(dl, 'Slots in use / total', t.active_slots + ' / ' + (t.unlimited ? 'unlimited' : t.slots),
+      t.unlimited ? 'at least one pool has no slot limit' : '');
+    row(dl, 'Requests / errors', n(t.requests) + ' / ' + n(t.errors));
+    row(dl, 'Clients', s.auth_enabled ? n(clients.length) + ': ' + (clients.map(function (c) { return c.name + ' (' + n(c.requests) + ')'; }).join(', ') || '–') : 'auth disabled');
+    row(dl, 'Config generation', String(s.config.generation), r);
 
-    fill($('pools'), s.pools.map(function (p) {
-      var q = p.queue_by_priority.map(function (x) { return 'p' + x.priority + ': ' + x.count; }).join(', ') || '–';
-      return [[p.name + (p.protocol ? ' (' + p.protocol + ')' : '') + (p.concurrency_group ? ' [group ' + p.concurrency_group + ']' : '')], [p.upstream], [p.active_slots + ' / ' + (p.unlimited ? 'unlimited' : p.max_concurrency), 'num'],
+    fill($('pools'), pools.map(function (p) {
+      var q = (p.queue_by_priority || []).map(function (x) { return 'p' + x.priority + ': ' + x.count; }).join(', ') || '–';
+      var grp = (p.concurrency_group || '–') + (p.coordinated ? ' (coordinated)' : '');
+      return [[p.name], [p.protocol || '–'], [p.upstream], [grp], [p.active_slots + ' / ' + (p.unlimited ? 'unlimited' : p.max_concurrency), 'num'],
         [n(p.queued), 'num'], [q], [n(p.total_served), 'num']];
-    }), 6);
-    $('clients-sec').hidden = !s.auth_enabled;
-    fill($('clients'), (s.clients || []).map(function (c) { return [[c.name], [n(c.requests), 'num']]; }), 2);
-    fill($('endpoints'), (s.endpoints || []).map(function (x) {
+    }), 8);
+    fill($('endpoints'), eps.map(function (x) {
       var tg = x.targets.map(function (t) { return t.pool + (t.target_model ? ' → ' + t.target_model : ''); }).join(', ');
       var ups = x.targets.map(function (t) { return t.upstream; }).join(', ');
-      var prio = x.targets.map(function (t) { return t.priority; }).join(' / ');
-      return [[x.name], [x.protocol], [x.mode], [tg], [ups], [prio, 'num'], [n(x.in_flight), 'num'],
+      return [[x.name], [x.protocol], [x.mode], [String(x.priority), 'num'], [tg], [ups], [n(x.in_flight), 'num'],
         [n(x.queued), 'num'], [n(x.requests), 'num'], [n(x.errors), 'num' + (x.errors ? ' err' : '')]];
     }), 10);
     $('updated').textContent = 'updated ' + now.toLocaleTimeString();
   }
+
+  var VIEWS = ['overview', 'pools', 'endpoints'];
+  function route() {
+    var v = (location.hash.replace(/^#\/?/, '') || 'overview');
+    if (VIEWS.indexOf(v) < 0) v = 'overview';
+    VIEWS.forEach(function (name) {
+      $('view-' + name).hidden = name !== v;
+      var a = document.querySelector('.sidebar a[data-view="' + name + '"]');
+      if (name === v) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+    });
+    document.title = v.charAt(0).toUpperCase() + v.slice(1) + ' · llm-proxy-manifestd dashboard';
+    closeNav();
+  }
+  function closeNav() {
+    document.body.classList.remove('nav-open');
+    $('nav-toggle').setAttribute('aria-expanded', 'false');
+  }
+  $('nav-toggle').addEventListener('click', function () {
+    var open = document.body.classList.toggle('nav-open');
+    this.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeNav(); });
+  window.addEventListener('hashchange', route);
+  route();
 
   function fail(msg) {
     setStatus('Unreachable', 'bad');

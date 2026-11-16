@@ -4,10 +4,22 @@ A lightweight, read-only web dashboard is embedded in the binary (plain HTML/CSS
 build step) and served by the proxy itself. It polls every 2 seconds and follows
 `prefers-color-scheme`.
 
-It shows: overall status, version, uptime, slots used/total, queued requests (total and per
-priority, per pool), a per-endpoint table (name, protocol, mode, targets and upstream hosts, priorities, in flight,
-queued, requests, errors) and the last config reload (generation, age, and whether the latest attempt was rejected).
-Request and error counters are per process and reset on restart.
+A left sidebar switches between three views; the current view is kept in the URL hash
+(`#/overview`, `#/pools`, `#/endpoints`) so links and reloads work, and it defaults to Overview. On
+narrow screens the sidebar collapses behind a menu button. It works the same on the dashboard host
+(`/`) and under the `/dashboard` mount.
+
+- **Overview**: a list of top-level facts: version, uptime, number of pools, endpoints and
+  concurrency groups, requests in flight, queued requests, slots in use / total (`unlimited` when a
+  pool has no limit), requests / errors, clients (names and request counts, never keys) and the
+  config generation with the last reload result (including whether the latest attempt was rejected).
+- **Pools**: a table with name, protocol, upstream host, concurrency group, slots used / max,
+  queue depth, queue by priority and requests served.
+- **Endpoints**: a table per endpoint with protocol, mode, priority, ordered targets
+  (pool → target model), upstream hosts, in flight, queued, requests and errors.
+
+The overall health badge stays visible in the header. Request and error counters are per process and
+reset on restart.
 
 ## Routing
 
