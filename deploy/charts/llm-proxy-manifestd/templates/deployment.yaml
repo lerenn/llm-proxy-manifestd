@@ -3,6 +3,8 @@
   directory (no subPath) and the proxy hot-reloads it without a pod restart.
 */ -}}
 {{- $providers := include "llm-proxy-manifestd.providers" . | fromJsonArray -}}
+{{- $sidecars := list -}}
+{{- range $providers }}{{- if .sidecar }}{{- $sidecars = append $sidecars . }}{{- end }}{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -10,8 +12,8 @@ metadata:
   labels:
     {{- include "llm-proxy-manifestd.labels" . | nindent 4 }}
 spec:
-  {{- if $providers }}
-  # Providers hold a login on a ReadWriteOnce volume: exactly one pod, and the
+  {{- if $sidecars }}
+  # Sidecar providers hold a login on a ReadWriteOnce volume: exactly one pod, and the
   # old pod must be gone before the new one starts (brief outage on rollout).
   replicas: 1
   strategy:
@@ -32,7 +34,7 @@ spec:
       labels:
         {{- include "llm-proxy-manifestd.selectorLabels" . | nindent 8 }}
     spec:
-      {{- if $providers }}
+      {{- if $sidecars }}
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
@@ -71,6 +73,19 @@ spec:
             - secretRef:
                 name: {{ .Values.existingSecret }}
           {{- end }}
+          {{- $apis := list }}
+          {{- range $providers }}{{- if not .sidecar }}{{- $apis = append $apis . }}{{- end }}{{- end }}
+          {{- if $apis }}
+          env:
+            {{- range $apis }}
+            - name: {{ .envName }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secretName }}
+                  key: {{ .secretKey }}
+                  optional: false
+            {{- end }}
+          {{- end }}
           ports:
             - name: http
               containerPort: 8080
@@ -94,7 +109,7 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if $providers }}
+          {{- if $sidecars }}
           securityContext:
             runAsUser: 65532
             allowPrivilegeEscalation: false
@@ -106,7 +121,7 @@ spec:
             - name: config
               mountPath: /etc/llm-proxy-manifestd
               readOnly: true
-        {{- range $providers }}
+        {{- range $sidecars }}
         {{- $a := .provider }}
         {{- $img := $.Values.adapters.claude.image }}
         # Provider {{ .name }}: loopback-only adapter; its pool in the ConfigMap
@@ -148,11 +163,11 @@ spec:
         - name: config
           configMap:
             name: {{ include "llm-proxy-manifestd.fullname" . }}
-        {{- if $providers }}
+        {{- if $sidecars }}
         - name: tmp
           emptyDir: {}
         {{- end }}
-        {{- range $providers }}
+        {{- range $sidecars }}
         - name: login-{{ .name }}
           persistentVolumeClaim:
             claimName: {{ include "llm-proxy-manifestd.fullname" $ }}-{{ .name }}

@@ -1,4 +1,4 @@
-# Subscription providers (CLI adapter sidecars)
+# Providers (subscription sidecars and API keys)
 
 The proxy speaks OpenAI-compatible HTTP to its pools and knows nothing about vendor CLIs. To use a Claude subscription login, run a **CLI adapter** as a sidecar container in the same pod: one adapter per provider. Each adapter is its own pool.
 
@@ -18,14 +18,70 @@ The Claude adapter has only been tested against a fake CLI that emits the docume
 This is meant for a single user running their own subscription. Vendor terms for subscription logins and automated or programmatic use may restrict this; you are responsible for reading and complying with them. Nothing here claims it is permitted.
 :::
 
-## Helm configuration
+## Provider types
+
+`providers` is a map; each entry has a `type`:
+
+| type | renders | pool `protocol` | notes |
+| :- | :- | :- | :- |
+| `claude` | sidecar container + PVC + pool | `anthropic` | Claude subscription login via the `claude` CLI (this page) |
+| `anthropic-api` | pool only | `anthropic` | Anthropic API key from a Secret |
+| `openai-api` | pool only | `openai` | OpenAI or any OpenAI-compatible gateway, key from a Secret |
+| `codex` | not implemented | `openai` | planned |
+
+Unknown types fail the render. The old `accounts` key (and `accountsBasePort`, `accountStorage`) fails the render with a pointer to `providers`.
+
+### API-key providers
+
+```yaml
+providers:
+  my-anthropic:
+    type: anthropic-api
+    url: https://api.anthropic.com   # default for this type
+    maxConcurrency: 4
+    apiKey: {existingSecret: {name: provider-keys, key: anthropic}}   # required
+  my-openai:
+    type: openai-api
+    url: https://api.openai.com      # default for this type
+    apiKey: {existingSecret: {name: provider-keys, key: openai}}
+```
+
+```sh
+kubectl create secret generic provider-keys \
+  --from-literal=anthropic="$ANTHROPIC_API_KEY" --from-literal=openai="$OPENAI_API_KEY"
+```
+
+The key is never put in values: the chart injects it into the proxy container as `PROVIDER_<NAME>_API_KEY` (name upper-cased, `-` becomes `_`) with `secretKeyRef` (`optional: false`, so a missing Secret blocks the pod) and renders `api_key: ${PROVIDER_<NAME>_API_KEY}` in the pool.
+
+**What the URL should be.** The proxy appends the client's request path (which already starts with `/v1/...`) to the path of `upstream_url`. So use the bare origin: `https://api.anthropic.com`, `https://api.openai.com`. Do **not** add `/v1` (it would become `/v1/v1/...`). For a gateway that lives under a path prefix, give that prefix only, e.g. `https://gw.example.com/openai`. Anthropic pools get `x-api-key`, OpenAI pools `Authorization: Bearer`.
+
+A pod with only API-key providers keeps the normal rolling update and `replicaCount`; the Recreate/replicas 1/hardening/PVC behaviour below applies as soon as one `claude` provider exists. The `check-config` init container runs whenever any provider exists.
+
+### Subscription with an API fallback
+
+List both pools in one route's Anthropic endpoint; the proxy prefers the pool with fewer in-flight requests and fails over on 5xx or transport errors (see [Multi-pool routing](./multi-pool-routing)):
+
+```yaml
+providers:
+  claude-subscription: {type: claude, maxConcurrency: 4}
+  my-anthropic: {type: anthropic-api, apiKey: {existingSecret: {name: provider-keys, key: anthropic}}}
+config:
+  routes:
+    standard-medium:
+      endpoints:
+        anthropic: {pools: [claude-subscription, my-anthropic], target_model: "claude-sonnet-5-5@medium", priority: 50}
+```
+
+Note that load is spread across both pools, not "subscription first": the API pool is used whenever it has fewer requests in flight.
+
+## Helm configuration (claude sidecar)
 
 ```yaml
 providers:
   claude-subscription:
     type: claude          # only "claude" is supported
     maxConcurrency: 4     # becomes the pool's max_concurrency (default 4)
-    # port: 9100          # default: providersBasePort (9100) + index in name order
+    # port: 9100          # default: providersBasePort (9100) + index among `claude` providers in name order
     # storage: {size: 1Gi, storageClass: ""}   # overrides providerStorage
     # resources: {}
     # env: []
@@ -47,7 +103,7 @@ config:
 
 For every entry in `providers` the chart renders:
 
-- one sidecar container named after the provider, listening on `127.0.0.1:<port>`; ports are assigned deterministically (`providersBasePort` + index of the provider in alphabetical order) unless `port` is set;
+- one sidecar container named after the provider, listening on `127.0.0.1:<port>`; ports are assigned deterministically (`providersBasePort` + index among `claude` providers in alphabetical order) unless `port` is set;
 - one PVC `<release>-<provider>` mounted at `/data/claude` (`CLAUDE_CONFIG_DIR`), holding the login;
 - a pool with the provider's name (`upstream_url: http://localhost:<port>`, `max_concurrency`, and `protocol: anthropic` for claude providers when ``) merged into `config.pools`. A clash with a user-defined pool of the same name fails the render.
 
@@ -98,3 +154,7 @@ Each request runs a fresh `claude` process (`-p`, `--input-format/--output-forma
 ## Codex (not implemented)
 
 There is no Codex adapter. A design sketch only: a sidecar would spawn `codex app-server` (JSON-RPC over stdio, login dir from `CODEX_HOME`) and expose the same contract. The app-server protocol has **not** been verified, so nothing is implemented.
+
+## Also unverified (API-key providers)
+
+- The `anthropic-api` and `openai-api` pools were validated with the repository's `/checker` only; they have not been exercised against the real APIs or a real cluster Secret.
