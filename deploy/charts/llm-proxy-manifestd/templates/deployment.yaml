@@ -174,8 +174,10 @@ spec:
               protocol: TCP
           lifecycle:
             preStop:
-              exec:
-                command: ["sleep", "3"]
+              # Native sleep: the distroless proxy image has no `sleep` binary (an exec hook fails and the pod
+              # would be killed before endpoints propagate).
+              sleep:
+                seconds: 3
           readinessProbe:
             httpGet:
               path: /healthz
@@ -231,8 +233,10 @@ spec:
             {{- end }}
           lifecycle:
             preStop:
-              exec:
-                command: ["sleep", "3"]
+              # Native sleep: the distroless proxy image has no `sleep` binary (an exec hook fails and the pod
+              # would be killed before endpoints propagate).
+              sleep:
+                seconds: 3
           # No readinessProbe on purpose: an adapter that is not logged in
           # must not make the whole pod NotReady (the Service would lose its
           # endpoints, taking api pools and failover targets down with it).
