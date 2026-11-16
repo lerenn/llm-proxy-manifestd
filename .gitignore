@@ -1,0 +1,9 @@
+/bin/
+/dist/
+*.test
+*.out
+node_modules/
+website/.vitepress/cache/
+website/.vitepress/dist/
+*.tgz
+.DS_Store
