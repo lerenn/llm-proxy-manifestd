@@ -33,7 +33,7 @@ dashboard:
       <div class="hpo-col">
         <h3 class="hpo-title">Resulting pod</h3>
         <div class="hpo-diagram" role="img"
-          aria-label="Clients call the proxy container on port 8080. The proxy forwards to the claude sidecar on localhost (a codex sidecar is planned), which calls the vendor API.">
+          aria-label="Clients call the proxy container on port 8080. The proxy calls vendor APIs directly (API passthrough) or through CLI sidecars on localhost for subscription logins.">
           <div class="hpo-row hpo-ext">Clients (coding agents)</div>
           <div class="hpo-arrow">&darr; <small>:8080</small></div>
           <div class="hpo-pod">
@@ -46,14 +46,14 @@ dashboard:
             <div class="hpo-arrow">&darr; <small>localhost</small></div>
             <div class="hpo-sidecars">
               <div class="hpo-box">
-                <b>claude-subscription</b>
-                <small>provider sidecar &middot; 127.0.0.1:9100</small>
-                <small>login on PVC</small>
+                <b>API passthrough</b>
+                <small>no sidecar &middot; direct to the vendor API with an API key</small>
+                <small>types: anthropic-api / openai-api</small>
               </div>
-              <div class="hpo-box hpo-exp">
-                <b>codex provider sidecar</b>
-                <small>not implemented</small>
-                <em>planned</em>
+              <div class="hpo-box">
+                <b>CLI sidecar <span class="hpo-sub">(for subscriptions)</span></b>
+                <small>one per subscription login &middot; 127.0.0.1:&lt;port&gt; &middot; login on PVC</small>
+                <small>types: claude / codex</small>
               </div>
             </div>
           </div>
@@ -62,12 +62,16 @@ dashboard:
         </div>
       </div>
     </div>
-    <p class="hpo-caption">Provider sidecar layout available for Claude; Codex provider is planned. See <a href="/guide/subscription-providers">Subscription providers</a>.</p>
+    <p class="hpo-caption">Providers are either API passthrough pools or CLI sidecars for subscription logins. See <a href="/guide/subscription-providers">Subscription providers</a>.</p>
   </section>
 </template>
 
 <style scoped>
-.hpo { margin-top: 32px; width: 100%; max-width: 960px; text-align: left; }
+.hpo { box-sizing: border-box; margin: 0; padding: 8px 24px 32px; width: 100%; text-align: left; }
+.hpo > * { max-width: 1152px; margin-left: auto; margin-right: auto; }
+/* Same horizontal padding as VitePress's feature cards (.VPFeatures) so both blocks line up. */
+@media (min-width: 640px) { .hpo { padding-left: 48px; padding-right: 48px; } }
+@media (min-width: 960px) { .hpo { padding-left: 64px; padding-right: 64px; } }
 .hpo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
 @media (max-width: 768px) { .hpo-grid { grid-template-columns: 1fr; } }
 .hpo-col { min-width: 0; }
@@ -90,7 +94,6 @@ dashboard:
   background: var(--vp-c-brand-soft); color: var(--vp-c-text-1); }
 .hpo-sidecars { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 @media (max-width: 480px) { .hpo-sidecars { grid-template-columns: 1fr; } }
-.hpo-exp { border-style: dashed; }
-.hpo-exp em { font-size: 11.5px; font-style: normal; color: var(--vp-c-warning-1); }
-.hpo-caption { margin: 12px 0 0; font-size: 12.5px; color: var(--vp-c-text-3); text-align: center; }
+.hpo-sub { font-weight: 400; color: var(--vp-c-text-2); }
+.hpo > .hpo-caption { margin-top: 12px; margin-bottom: 0; font-size: 12.5px; color: var(--vp-c-text-3); text-align: center; }
 </style>
