@@ -79,3 +79,12 @@ func TestCheckerUnlimitedAndOmitted(t *testing.T) {
 		t.Fatal("negative must be invalid")
 	}
 }
+
+func TestCheckerWarnsMissingClientKey(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "has"), []byte("sekret-key"), 0o600)
+	code, out, errs := check(t, "server: {client_keys_dir: '"+dir+"'}\npools:\n  p: {upstream_url: 'http://x', max_concurrency: 1}\nendpoints:\n  openai:\n    r: {targets: [{pool: p}]}\nclients:\n  has:\n  missing:\n")
+	if code != 0 || !strings.Contains(errs, `client "missing" has no key`) || strings.Contains(errs, `"has"`) || strings.Contains(errs+out, "sekret-key") {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errs)
+	}
+}

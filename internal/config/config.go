@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -54,6 +55,21 @@ type Config struct {
 	// LegacyRoutes catches the removed top-level "routes:" key so it fails
 	// with a pointer to the new form instead of a generic decode error.
 	LegacyRoutes present `yaml:"routes"`
+
+	// Clients enables client API keys: each name is a client whose key is the
+	// file of the same name in server.client_keys_dir. Empty = auth disabled.
+	// An entry may be empty/null.
+	Clients map[string]ClientConfig `yaml:"clients"`
+}
+
+// ClientConfig holds optional per-client settings.
+type ClientConfig struct {
+	// Priority is the default priority of this client's requests; an
+	// X-Priority header still overrides it. Nil keeps the endpoint/target priority.
+	Priority *int `yaml:"priority"`
+	// Endpoints is an optional allow-list of endpoint names (the request's
+	// `model`, under any protocol); omitted means every endpoint.
+	Endpoints []string `yaml:"endpoints"`
 }
 
 // present records that a key was set, whatever its value.
@@ -67,6 +83,11 @@ type ServerConfig struct {
 	Listen        string   `yaml:"listen"`
 	QueueTimeout  Duration `yaml:"queue_timeout"`
 	AgingInterval Duration `yaml:"aging_interval"`
+	// ClientKeysDir, when set, enables client API keys: a directory with one
+	// file per client (file name = client name, content = the key), typically
+	// a mounted Secret. Empty disables authentication. The keys themselves
+	// never appear in the manifest.
+	ClientKeysDir string `yaml:"client_keys_dir"`
 }
 
 // DashboardConfig configures the public read-only dashboard.
@@ -307,6 +328,21 @@ func (c *Config) validate() error {
 			eps[name] = e
 		}
 	}
+	if len(c.Clients) > 0 && c.Server.ClientKeysDir == "" {
+		return errors.New("clients requires server.client_keys_dir (the directory holding one key file per client)")
+	}
+	for name, cl := range c.Clients {
+		if !clientName.MatchString(name) {
+			return fmt.Errorf("client %q: name must match %s (it is also the key file name)", name, clientName)
+		}
+		for _, en := range cl.Endpoints {
+			_, a := c.Endpoints[ProtocolAnthropic][en]
+			_, o := c.Endpoints[ProtocolOpenAI][en]
+			if !a && !o {
+				return fmt.Errorf("client %q: endpoints references unknown endpoint %q (not under endpoints.anthropic nor endpoints.openai)", name, en)
+			}
+		}
+	}
 	return nil
 }
 
@@ -320,6 +356,21 @@ const legacyRoutesError = "the top-level `routes:` key was removed: declare endp
 	"        targets:\n" +
 	"          - {pool: <pool>, target_model: <upstream model>}\n" +
 	"see https://llm-proxy-manifestd.lerenn.dev/guide/protocol-endpoints"
+
+var clientName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
+
+// Allows reports whether the client may use the given endpoint name.
+func (cl ClientConfig) Allows(name string) bool {
+	if len(cl.Endpoints) == 0 {
+		return true
+	}
+	for _, e := range cl.Endpoints {
+		if e == name {
+			return true
+		}
+	}
+	return false
+}
 
 func (c *Config) validateEndpoint(label, proto string, e *Endpoint) error {
 	switch e.Mode {

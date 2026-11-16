@@ -34,4 +34,9 @@ data:
     {{- if $pools }}
     {{- $_ := set $cfg "pools" $pools }}
     {{- end }}
+    {{- if include "llm-proxy-manifestd.clientKeysEnabled" . }}
+    {{- $server := deepCopy (get $cfg "server" | default dict) }}
+    {{- $_ := set $server "client_keys_dir" (include "llm-proxy-manifestd.clientKeysPath" .) }}
+    {{- $_ := set $cfg "server" $server }}
+    {{- end }}
     {{- toYaml $cfg | nindent 4 }}

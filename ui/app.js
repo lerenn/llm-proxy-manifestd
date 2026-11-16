@@ -70,6 +70,8 @@
       return [[p.name + (p.protocol ? ' (' + p.protocol + ')' : '')], [p.upstream], [p.active_slots + ' / ' + (p.unlimited ? 'unlimited' : p.max_concurrency), 'num'],
         [n(p.queued), 'num'], [q], [n(p.total_served), 'num']];
     }), 6);
+    $('clients-sec').hidden = !s.auth_enabled;
+    fill($('clients'), (s.clients || []).map(function (c) { return [[c.name], [n(c.requests), 'num']]; }), 2);
     fill($('endpoints'), (s.endpoints || []).map(function (x) {
       var tg = x.targets.map(function (t) { return t.pool + (t.target_model ? ' → ' + t.target_model : ''); }).join(', ');
       var ups = x.targets.map(function (t) { return t.upstream; }).join(', ');
