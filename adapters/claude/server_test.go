@@ -137,3 +137,20 @@ func TestErrors(t *testing.T) {
 		t.Fatalf("generic: %d", rr.Code)
 	}
 }
+
+func TestProbe(t *testing.T) {
+	s := &Server{Bin: "x", ConfigDir: loggedIn(t)}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	addr := strings.TrimPrefix(ts.URL, "http://")
+	if probe(addr) != 0 {
+		t.Fatal("expected ready")
+	}
+	s.ConfigDir = t.TempDir()
+	if probe(addr) != 1 {
+		t.Fatal("expected not ready")
+	}
+	if probe("127.0.0.1:1") != 1 {
+		t.Fatal("expected failure")
+	}
+}

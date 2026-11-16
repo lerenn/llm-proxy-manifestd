@@ -22,6 +22,9 @@ is pinned and checksum-verified in the Dockerfile (no Node.js in the image).
 Environment: `CLAUDE_CONFIG_DIR`, `ADAPTER_LISTEN` (default `127.0.0.1:9100`),
 `CLAUDE_BIN`.
 
+`adapter-claude ready` exits 0 when `/ready` answers 200 (used as an exec readiness
+probe, since the adapter listens on loopback only).
+
 Status: tested only against a fake CLI that emits the documented stream-json
 events. It has never run against a real subscription login.
 
