@@ -62,7 +62,7 @@ During a rollout, old (in-memory) and new (coordinated) proxies do not see each 
 counts locally. Roll out the first coordinated version with `maxSurge: 0`, or accept one window of
 double limits. Between coordinated versions the key layout (`{prefix:pool:NAME}:q|l|w|max`) and
 Lua scripts are stable; a change would use a new key prefix. See also the
-Rolling updates guide (added with the chart's surge support).
+[Rolling updates](/guide/rolling-updates) guide (the chart's surge support).
 
 ## Mixed `max_concurrency`
 

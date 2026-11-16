@@ -66,4 +66,6 @@ providers:
     apiKey: {existingSecret: {name: my-secret, key: nevermetered}}
 ```
 
+The proxy-side behaviour (leases, queue, `fail_mode`, key layout) is documented in [Coordination](/guide/coordination). The first rollout that turns coordination on overlaps old (local) and new (coordinated) proxies: expect one window of double limits.
+
 See also [Subscription providers](/guide/subscription-providers) and [Helm Values](/guide/helm-values).
