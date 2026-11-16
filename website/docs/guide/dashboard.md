@@ -5,8 +5,8 @@ build step) and served by the proxy itself. It polls every 2 seconds and follows
 `prefers-color-scheme`.
 
 It shows: overall status, version, uptime, slots used/total, queued requests (total and per
-priority, per pool), a per-route table (pools and upstream hosts, priority, in flight, queued, requests,
-errors) and the last config reload (generation, age, and whether the latest attempt was rejected).
+priority, per pool), a per-endpoint table (name, protocol, mode, targets and upstream hosts, priorities, in flight,
+queued, requests, errors) and the last config reload (generation, age, and whether the latest attempt was rejected).
 Request and error counters are per process and reset on restart.
 
 ## Routing
@@ -44,9 +44,9 @@ This creates a second Ingress pointing at the same Service.
 
 ## Public by design
 
-There is no authentication. The JSON (`GET /api/state`) and the HTML only contain route/pool names,
+There is no authentication. The JSON (`GET /api/state`) and the HTML only contain endpoint/pool names,
 upstream `host[:port]`, counts, priorities, timings and versions. API keys, expanded environment
 variables, full upstream URLs (userinfo, path, query), request/response bodies, prompts, client
 headers and reload error messages are never included; a test asserts it. Responses carry a strict
-Content-Security-Policy. If route names are sensitive, set `dashboard.enabled: false` or restrict the
+Content-Security-Policy. If endpoint names are sensitive, set `dashboard.enabled: false` or restrict the
 hostname at your ingress.

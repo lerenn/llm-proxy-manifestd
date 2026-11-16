@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/lerenn/llm-proxy-manifestd/internal/config"
 	"github.com/lerenn/llm-proxy-manifestd/ui"
 )
 
@@ -18,26 +19,37 @@ type routeCounters struct {
 	errors   atomic.Int64
 }
 
-func (h *Handler) counters(route string) *routeCounters {
-	if v, ok := h.routes.Load(route); ok {
+// counterKey identifies an endpoint across protocols.
+func counterKey(proto, name string) string { return proto + "/" + name }
+
+func (h *Handler) counters(key string) *routeCounters {
+	if v, ok := h.endpoints.Load(key); ok {
 		return v.(*routeCounters)
 	}
-	v, _ := h.routes.LoadOrStore(route, &routeCounters{})
+	v, _ := h.endpoints.LoadOrStore(key, &routeCounters{})
 	return v.(*routeCounters)
+}
+
+func (h *Handler) rrCounter(key string) *atomic.Uint64 {
+	if v, ok := h.rr.Load(key); ok {
+		return v.(*atomic.Uint64)
+	}
+	v, _ := h.rr.LoadOrStore(key, new(atomic.Uint64))
+	return v.(*atomic.Uint64)
 }
 
 // Dashboard JSON shapes. Everything here is served publicly: only names,
 // upstream host names, counts and timings may appear. Never add credentials,
 // full URLs, bodies or headers.
 type dashboardState struct {
-	Status        string           `json:"status"`
-	Version       string           `json:"version"`
-	Now           time.Time        `json:"now"`
-	UptimeSeconds int64            `json:"uptime_seconds"`
-	Config        dashboardConfig  `json:"config"`
-	Totals        dashboardTotals  `json:"totals"`
-	Pools         []dashboardPool  `json:"pools"`
-	Routes        []dashboardRoute `json:"routes"`
+	Status        string              `json:"status"`
+	Version       string              `json:"version"`
+	Now           time.Time           `json:"now"`
+	UptimeSeconds int64               `json:"uptime_seconds"`
+	Config        dashboardConfig     `json:"config"`
+	Totals        dashboardTotals     `json:"totals"`
+	Pools         []dashboardPool     `json:"pools"`
+	Endpoints     []dashboardEndpoint `json:"endpoints"`
 }
 
 type dashboardConfig struct {
@@ -72,30 +84,23 @@ type dashboardPool struct {
 	TotalServed    int64            `json:"total_served"`
 }
 
-type dashboardEndpoint struct {
-	Protocol  string   `json:"protocol"`
-	Pools     []string `json:"pools"`
-	Upstreams []string `json:"upstreams"`
-	Target    string   `json:"target_model,omitempty"`
-	Priority  int      `json:"priority"`
+type dashboardTarget struct {
+	Pool     string `json:"pool"`
+	Upstream string `json:"upstream"`
+	Target   string `json:"target_model,omitempty"`
+	Priority int    `json:"priority"`
 }
 
-type dashboardRoute struct {
-	Name string `json:"name"`
-	// Pool and Upstream describe the first pool, kept for compatibility.
-	Pool      string   `json:"pool"`
-	Upstream  string   `json:"upstream"`
-	Pools     []string `json:"pools"`
-	Upstreams []string `json:"upstreams"`
-	Target    string   `json:"target_model,omitempty"`
-	Priority  int      `json:"priority"`
-	// Endpoints lists the per-protocol endpoints; the flat fields above
-	// mirror the openai endpoint (or the first one when there is none).
-	Endpoints []dashboardEndpoint `json:"endpoints"`
-	InFlight  int64               `json:"in_flight"`
-	Queued    int64               `json:"queued"`
-	Requests  int64               `json:"requests"`
-	Errors    int64               `json:"errors"`
+type dashboardEndpoint struct {
+	Protocol string            `json:"protocol"`
+	Name     string            `json:"name"`
+	Mode     string            `json:"mode"`
+	Priority int               `json:"priority"`
+	Targets  []dashboardTarget `json:"targets"`
+	InFlight int64             `json:"in_flight"`
+	Queued   int64             `json:"queued"`
+	Requests int64             `json:"requests"`
+	Errors   int64             `json:"errors"`
 }
 
 func (h *Handler) dashboardSnapshot() (dashboardState, bool) {
@@ -111,7 +116,7 @@ func (h *Handler) dashboardSnapshot() (dashboardState, bool) {
 		UptimeSeconds: int64(now.Sub(h.started).Seconds()),
 		Config:        dashboardConfig{Generation: st.Generation, LoadedAt: st.LoadedAt.UTC()},
 		Pools:         []dashboardPool{},
-		Routes:        []dashboardRoute{},
+		Endpoints:     []dashboardEndpoint{},
 	}
 	if h.reloadStatus != nil {
 		if rs := h.reloadStatus(); !rs.LastAttempt.IsZero() {
@@ -151,34 +156,24 @@ func (h *Handler) dashboardSnapshot() (dashboardState, bool) {
 		out.Totals.Active += s.Active
 		out.Totals.Queued += s.QueueDepth
 	}
-	for _, n := range st.Config.RouteNames() {
-		r := st.Config.Routes[n]
-		rc := h.counters(n)
-		var eps []dashboardEndpoint
-		for _, proto := range r.EndpointProtocols() {
-			e := r.Endpoints[proto]
-			ups := make([]string, len(e.Pools))
-			for i, pn := range e.Pools {
-				ups[i] = upstream[pn]
+	for _, proto := range config.Protocols {
+		for _, n := range st.Config.EndpointNames(proto) {
+			e, _ := st.Config.Endpoint(proto, n)
+			rc := h.counters(counterKey(proto, n))
+			ts := make([]dashboardTarget, len(e.Targets))
+			for i, t := range e.Targets {
+				ts[i] = dashboardTarget{Pool: t.Pool, Upstream: upstream[t.Pool], Target: t.TargetModel, Priority: e.QueuePriority(i)}
 			}
-			eps = append(eps, dashboardEndpoint{Protocol: proto, Pools: e.Pools, Upstreams: ups, Target: e.TargetModel, Priority: e.Priority})
-		}
-		first := eps[0]
-		for _, e := range eps {
-			if e.Protocol == "openai" {
-				first = e
+			de := dashboardEndpoint{
+				Protocol: proto, Name: n, Mode: e.Mode, Priority: e.Priority, Targets: ts,
+				InFlight: rc.inflight.Load(), Queued: rc.queued.Load(),
+				Requests: rc.requests.Load(), Errors: rc.errors.Load(),
 			}
+			out.Endpoints = append(out.Endpoints, de)
+			out.Totals.InFlight += de.InFlight
+			out.Totals.Requests += de.Requests
+			out.Totals.Errors += de.Errors
 		}
-		dr := dashboardRoute{
-			Name: n, Pool: first.Pools[0], Upstream: first.Upstreams[0], Pools: first.Pools, Upstreams: first.Upstreams,
-			Target: first.Target, Priority: first.Priority, Endpoints: eps,
-			InFlight: rc.inflight.Load(), Queued: rc.queued.Load(),
-			Requests: rc.requests.Load(), Errors: rc.errors.Load(),
-		}
-		out.Routes = append(out.Routes, dr)
-		out.Totals.InFlight += dr.InFlight
-		out.Totals.Requests += dr.Requests
-		out.Totals.Errors += dr.Errors
 	}
 	return out, true
 }

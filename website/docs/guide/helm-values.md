@@ -45,15 +45,22 @@ dashboard:
   enabled: true            # default true
   host: ""                  # exact dashboard hostname; default: any host starting with "dashboard."
   path: /dashboard         # prefix on every host; "off" disables
-routes:
-  <name>:                  # the model name clients send
-    pool: <pool name>
-    target_model: gpt-5.4  # optional rewrite of "model"
-    priority: 50           # higher is served first
+endpoints:
+  <anthropic|openai>:      # anthropic: /v1/messages; openai: every other /v1/ path
+    <name>:                # the model name clients send
+      mode: least-inflight # optional: least-inflight (default), round-robin, failover
+      priority: 50         # optional, default 0; higher is served first
+      targets:             # one or more, tried per `mode`, failover on 5xx/transport error
+        - pool: <pool name>          # must have the endpoint's protocol
+          target_model: gpt-5.4      # optional rewrite of "model"
+          # priority: 60             # optional per-target override
 ```
 
+The pre-endpoints top-level `routes:` key (and the chart's `defaultRoutes` value) were removed and
+are rejected with a migration hint; see [Protocol endpoints](./protocol-endpoints).
+
 Environment variables are expanded (`os.ExpandEnv`) on the raw YAML before parsing. Unknown keys,
-unknown pools in routes, `max_concurrency < 1`, bad URLs and bad durations are all rejected.
+unknown or wrong-protocol pools in endpoint targets, `max_concurrency < 1`, bad URLs and bad durations are all rejected.
 
 ## Deployment behaviour
 

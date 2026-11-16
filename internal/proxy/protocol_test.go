@@ -38,15 +38,13 @@ pools:
   c1: {upstream_url: '` + anth1 + `', protocol: anthropic, api_key: 'ak1', max_concurrency: 1}
   c2: {upstream_url: '` + anth2 + `', protocol: anthropic, api_key: 'ak2', max_concurrency: 1}
   o1: {upstream_url: '` + oai + `', api_key: 'ok1', max_concurrency: 1}
-routes:
-  fast:
-    endpoints:
-      anthropic: {pools: [c1, c2], target_model: 'haiku@low', priority: 10}
-      openai: {pools: [o1], target_model: 'luna@low', priority: 10}
-  oonly: {pool: o1, target_model: gpt}
-  aonly:
-    endpoints:
-      anthropic: {pools: [c1]}
+endpoints:
+  anthropic:
+    fast: {priority: 10, targets: [{pool: c1, target_model: 'haiku@low'}, {pool: c2, target_model: 'haiku@low'}]}
+    aonly: {targets: [{pool: c1}]}
+  openai:
+    fast: {priority: 10, targets: [{pool: o1, target_model: 'luna@low'}]}
+    oonly: {targets: [{pool: o1, target_model: gpt}]}
 `
 }
 
@@ -124,7 +122,9 @@ func TestMissingEndpointErrorShapes(t *testing.T) {
 		t.Fatalf("anthropic error: %d %+v", r.StatusCode, a)
 	}
 	r = post(t, srv.URL+"/v1/chat/completions", `{"model":"aonly"}`, nil)
-	var o struct{ Error struct{ Type, Code, Message string } }
+	var o struct {
+		Error struct{ Type, Code, Message string }
+	}
 	_ = json.NewDecoder(r.Body).Decode(&o)
 	r.Body.Close()
 	if r.StatusCode != 404 || o.Error.Code != "endpoint_not_configured" {
@@ -169,9 +169,49 @@ func TestModelsPerProtocol(t *testing.T) {
 	if !strings.Contains(oai, `"fast"`) || !strings.Contains(oai, `"oonly"`) || strings.Contains(oai, `"aonly"`) {
 		t.Fatalf("openai list: %s", oai)
 	}
-	ant := get1(map[string]string{"anthropic-version": "2023-06-01"})
-	if !strings.Contains(ant, `"type":"model"`) || !strings.Contains(ant, `"aonly"`) || strings.Contains(ant, `"oonly"`) || !strings.Contains(ant, `"has_more":false`) {
-		t.Fatalf("anthropic list: %s", ant)
+	var ol struct {
+		Object string
+		Data   []struct {
+			ID, Object string
+			OwnedBy    string `json:"owned_by"`
+		}
+	}
+	if err := json.Unmarshal([]byte(oai), &ol); err != nil || ol.Object != "list" || len(ol.Data) != 2 ||
+		ol.Data[0].ID != "fast" || ol.Data[1].ID != "oonly" || ol.Data[0].Object != "model" || ol.Data[0].OwnedBy == "" {
+		t.Fatalf("openai list: %s", oai)
+	}
+	for _, hdr := range []map[string]string{{"anthropic-version": "2023-06-01"}, {"x-api-key": "k"}, {"x-api-key": "k", "Authorization": "Bearer k"}} {
+		ant := get1(hdr)
+		var al struct {
+			Data []struct {
+				Type, ID    string
+				DisplayName string `json:"display_name"`
+				CreatedAt   string `json:"created_at"`
+			}
+			HasMore bool   `json:"has_more"`
+			FirstID string `json:"first_id"`
+			LastID  string `json:"last_id"`
+		}
+		if err := json.Unmarshal([]byte(ant), &al); err != nil || len(al.Data) != 2 || al.Data[0].ID != "aonly" || al.Data[1].ID != "fast" ||
+			al.Data[0].Type != "model" || al.Data[0].DisplayName != "aonly" || al.Data[0].CreatedAt == "" ||
+			al.HasMore || al.FirstID != "aonly" || al.LastID != "fast" || strings.Contains(ant, `"oonly"`) {
+			t.Fatalf("anthropic list (%v): %s", hdr, ant)
+		}
+	}
+}
+
+func TestModelsEmptyAnthropicList(t *testing.T) {
+	cfg, err := config.Parse([]byte("pools:\n  o: {upstream_url: 'http://x', max_concurrency: 1}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := New(func() *config.RuntimeState { return &config.RuntimeState{Config: cfg} }, quiet())
+	req := httptest.NewRequest("GET", "/v1/models", nil)
+	req.Header.Set("anthropic-version", "2023-06-01")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if b := rec.Body.String(); rec.Code != 200 || !strings.Contains(b, `"data":[]`) || !strings.Contains(b, `"first_id":null`) {
+		t.Fatalf("%d %s", rec.Code, b)
 	}
 }
 
@@ -196,7 +236,7 @@ func TestEndpointsHotReloadAndDashboard(t *testing.T) {
 	u := recorder("x", &h, 200, nil)
 	defer u.Close()
 	y := protoYAML(u.URL, u.URL, u.URL)
-	l, p := protoLoader(t, strings.Replace(y, "  oonly:", "  zz:", 1))
+	l, p := protoLoader(t, y)
 	hd := New(l.State, quiet())
 	srv := httptest.NewServer(hd)
 	defer srv.Close()
@@ -206,9 +246,9 @@ func TestEndpointsHotReloadAndDashboard(t *testing.T) {
 	if r.StatusCode != 404 {
 		t.Fatalf("want 404, got %d", r.StatusCode)
 	}
-	// Reload adds an anthropic endpoint to the route.
-	y2 := strings.Replace(y, "  oonly: {pool: o1, target_model: gpt}",
-		"  oonly:\n    endpoints:\n      openai: {pool: o1}\n      anthropic: {pool: c1}", 1)
+	// Reload adds an anthropic endpoint with the same name.
+	y2 := strings.Replace(y, "    aonly: {targets: [{pool: c1}]}",
+		"    aonly: {targets: [{pool: c1}]}\n    oonly: {targets: [{pool: c1}]}", 1)
 	if err := os.WriteFile(p, []byte(y2), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -222,13 +262,13 @@ func TestEndpointsHotReloadAndDashboard(t *testing.T) {
 	}
 	// An invalid reload (protocol mismatch) keeps the previous state.
 	prev := l.State()
-	_ = os.WriteFile(p, []byte(strings.Replace(y2, "anthropic: {pool: c1}", "anthropic: {pool: o1}", 1)), 0o644)
+	_ = os.WriteFile(p, []byte(strings.Replace(y2, "oonly: {targets: [{pool: c1}]}", "oonly: {targets: [{pool: o1}]}", 1)), 0o644)
 	if l.Reload() == nil || l.State() != prev {
 		t.Fatal("invalid reload must be rejected")
 	}
 
 	body := get(t, hd, "proxy.test", "/dashboard/api/state").Body.String()
-	for _, want := range []string{`"endpoints":[{"protocol":"anthropic"`, `"protocol":"openai"`, `"protocol":"anthropic","upstream"`} {
+	for _, want := range []string{`"endpoints":[{"protocol":"anthropic","name":"aonly"`, `"protocol":"anthropic","name":"oonly"`, `"protocol":"openai","name":"oonly"`, `{"pool":"c1","upstream"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %s in %s", want, body)
 		}

@@ -47,7 +47,8 @@ dashboard:
 # providers" guide). Each entry renders, in the same pod: one sidecar container
 # listening on 127.0.0.1:<port>, one PVC holding its login at /data/claude, and
 # a pool of the same name (upstream_url http://localhost:<port>) merged into
-# config.pools. Reference the pool from routes as usual. Empty = feature off.
+# config.pools. Reference the pool from config.endpoints targets as usual.
+# Empty = feature off.
 #
 # Setting any provider forces replicas: 1 and strategy Recreate, disables the
 # service account token and runs every container non-root with a read-only
@@ -95,26 +96,36 @@ config:
     listen: ":8080"
     queue_timeout: "120s"
     aging_interval: "5s"
-  # Add your own pools/routes here. With no `providers`, the chart also applies
-  # `defaultPools`/`defaultRoutes` below (the original example config) under yours.
+  # Add your own pools/endpoints here. With no `providers`, the chart also applies
+  # `defaultPools`/`defaultEndpoints` below (the original example config) under yours.
   pools: {}
-  routes:
-    # Several pools per route (least in-flight first, failover on 5xx/transport error):
-    # standard-medium: {pools: [claude-a, claude-b], target_model: "claude-sonnet-5-5@medium", priority: 50}
-    # Per-protocol endpoints (Claude clients use the anthropic endpoint):
-    # fast:
-    #   endpoints:
-    #     anthropic: {pools: [claude-subscription], target_model: "claude-haiku-5-5@low", priority: 10}
-    {}
+  # endpoints.<anthropic|openai>.<name>: the name is the `model` clients send;
+  # anthropic serves /v1/messages, openai every other /v1/ path.
+  #   mode: least-inflight (default) | round-robin | failover
+  #   priority: queue priority (default 0), overridable per target
+  #   targets: [{pool, target_model, priority?}]  (pools must speak the protocol)
+  endpoints: {}
+  #   anthropic:
+  #     fast:
+  #       priority: 10
+  #       targets:
+  #         - {pool: claude-subscription, target_model: "claude-haiku-5-5@low"}
+  #   openai:
+  #     standard-medium:
+  #       mode: least-inflight
+  #       targets:
+  #         - {pool: openai-a, target_model: "gpt-5.4"}
+  #         - {pool: openai-b, target_model: "gpt-5.4"}
 
-# Example pool and routes applied only when `providers` is empty (kept so that
-# existing installs render unchanged). Set both to {} to disable.
+# Example pool and endpoints applied only when `providers` is empty (kept so
+# that existing installs render the same endpoints). Set both to {} to disable.
 defaultPools:
   codex-sub:
     upstream_url: http://cliproxyapi.default.svc.cluster.local:8317
     api_key: "${LOCAL_BRIDGE_KEY}"
     max_concurrency: 2
-defaultRoutes:
-  codex-interactive: {pool: codex-sub, target_model: gpt-5.4, priority: 100}
-  codex-default: {pool: codex-sub, target_model: gpt-5.4, priority: 50}
-  codex-background: {pool: codex-sub, target_model: gpt-5.4, priority: 10}
+defaultEndpoints:
+  openai:
+    codex-interactive: {priority: 100, targets: [{pool: codex-sub, target_model: gpt-5.4}]}
+    codex-default: {priority: 50, targets: [{pool: codex-sub, target_model: gpt-5.4}]}
+    codex-background: {priority: 10, targets: [{pool: codex-sub, target_model: gpt-5.4}]}

@@ -1,5 +1,6 @@
 // Command checker validates a llm-proxy-manifestd manifest using the exact
-// loading code of the proxy. It is meant for init containers, Helm hooks and
+// loading code of the proxy. Non-fatal warnings (for example an endpoint name
+// defined for only one protocol) go to stderr and do not change the exit code. It is meant for init containers, Helm hooks and
 // CI steps.
 //
 // Environment variables referenced as ${VAR} are expanded exactly as the
@@ -44,6 +45,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "invalid config %s: %v\n", *path, err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "config ok: %d pools, %d routes\n", len(cfg.Pools), len(cfg.Routes))
+	for _, w := range cfg.Warnings() {
+		fmt.Fprintf(stderr, "warning: %s\n", w)
+	}
+	fmt.Fprintf(stdout, "config ok: %d pools, %d anthropic endpoints, %d openai endpoints\n",
+		len(cfg.Pools), len(cfg.Endpoints[config.ProtocolAnthropic]), len(cfg.Endpoints[config.ProtocolOpenAI]))
 	return 0
 }

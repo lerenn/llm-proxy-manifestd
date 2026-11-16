@@ -23,10 +23,11 @@ func newState(t *testing.T, upstream string, max int, queueTimeout time.Duration
 server: {queue_timeout: "` + queueTimeout.String() + `"}
 pools:
   p: {upstream_url: "` + upstream + `", api_key: "sekret", max_concurrency: ` + string(rune('0'+max)) + `}
-routes:
-  fast: {pool: p, target_model: real-model, priority: 100}
-  slow: {pool: p, target_model: real-model, priority: 1}
-  same: {pool: p}
+endpoints:
+  openai:
+    fast: {priority: 100, targets: [{pool: p, target_model: real-model}]}
+    slow: {priority: 1, targets: [{pool: p, target_model: real-model}]}
+    same: {targets: [{pool: p}]}
 `
 	cfg, err := config.Parse([]byte(yml))
 	if err != nil {
