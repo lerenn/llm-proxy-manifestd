@@ -122,9 +122,7 @@ func TestMissingEndpointErrorShapes(t *testing.T) {
 		t.Fatalf("anthropic error: %d %+v", r.StatusCode, a)
 	}
 	r = post(t, srv.URL+"/v1/chat/completions", `{"model":"aonly"}`, nil)
-	var o struct {
-		Error struct{ Type, Code, Message string }
-	}
+	var o struct{ Error struct{ Type, Code, Message string } }
 	_ = json.NewDecoder(r.Body).Decode(&o)
 	r.Body.Close()
 	if r.StatusCode != 404 || o.Error.Code != "endpoint_not_configured" {
