@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/lerenn/llm-proxy-manifestd/internal/adapter/common"
 	"time"
 )
 
@@ -134,6 +136,7 @@ func Run(ctx context.Context, s Spec, onText func(string)) (Result, error) {
 
 	cmd := exec.Command(s.Bin, s.args()...) // not CommandContext: we interrupt first
 	cmd.Dir = dir
+	common.Isolate(cmd)
 	cmd.Env = append(os.Environ(), "CODEX_HOME="+s.CodexHome)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -148,6 +151,7 @@ func Run(ctx context.Context, s Spec, onText func(string)) (Result, error) {
 	if err := cmd.Start(); err != nil {
 		return Result{}, fmt.Errorf("start codex: %w", err)
 	}
+	defer common.Track(cmd)()
 	c := &client{w: stdin}
 
 	var (
@@ -189,7 +193,7 @@ func Run(ctx context.Context, s Spec, onText func(string)) (Result, error) {
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):
-			_ = cmd.Process.Kill()
+			_ = common.KillGroup(cmd)
 			<-done
 		}
 		if e != nil {

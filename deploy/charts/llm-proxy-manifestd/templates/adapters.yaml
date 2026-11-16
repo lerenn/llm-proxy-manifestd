@@ -59,11 +59,17 @@ spec:
                   name: {{ include "llm-proxy-manifestd.adapterTokenSecret" $ }}
                   key: token
                   optional: false
+            - name: ADAPTER_SHUTDOWN_TIMEOUT
+              value: {{ printf "%ds" (sub (int $.Values.terminationGracePeriodSeconds) 5) | quote }}
             - name: {{ .homeEnv }}
               value: {{ .dataDir }}
             {{- with $a.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "3"]
           ports:
             - name: http
               containerPort: {{ .port }}

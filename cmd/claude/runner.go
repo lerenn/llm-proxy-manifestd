@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/lerenn/llm-proxy-manifestd/internal/adapter/common"
 )
 
 // Spec describes one CLI invocation (one request = one fresh process).
@@ -93,6 +95,8 @@ func Run(ctx context.Context, s Spec, onText func(string)) (Result, error) {
 
 	cmd := exec.CommandContext(ctx, s.Bin, s.args()...)
 	cmd.Dir = dir
+	common.Isolate(cmd)
+	cmd.Cancel = func() error { return common.KillGroup(cmd) }
 	cmd.Env = append(os.Environ(),
 		"CLAUDE_CONFIG_DIR="+s.ConfigDir,
 		"DISABLE_AUTOUPDATER=1",
@@ -111,6 +115,7 @@ func Run(ctx context.Context, s Spec, onText func(string)) (Result, error) {
 	if err := cmd.Start(); err != nil {
 		return Result{}, fmt.Errorf("start claude: %w", err)
 	}
+	defer common.Track(cmd)()
 	in, _ := json.Marshal(map[string]any{
 		"type":    "user",
 		"message": map[string]any{"role": "user", "content": s.Prompt},

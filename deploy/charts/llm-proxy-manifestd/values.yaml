@@ -12,7 +12,9 @@ existingSecret: ""
 # With them, >1 is allowed only in the "rolling" topology (see "Rolling updates" below), else render error.
 replicaCount: 1
 
-# Pods get this long to finish in-flight streams on shutdown.
+# Pods get this long to finish in-flight streams on shutdown. Adapters (claude/codex)
+# are given ADAPTER_SHUTDOWN_TIMEOUT = this value minus 5s (3s preStop sleep + margin) to
+# drain in-flight turns before killing the CLI processes, so it always fits in the grace period.
 terminationGracePeriodSeconds: 600
 
 resources: {}

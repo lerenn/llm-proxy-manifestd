@@ -96,6 +96,7 @@ grep -q 'type: RollingUpdate' <<<"$proxyDep" && grep -q 'maxSurge: 1' <<<"$proxy
 grep -q 'name: ADAPTER_TOKEN' <<<"$proxyDep" && grep -q 'adapter-token' <<<"$proxyDep" && grep -q -- '--adapter-token-secret=r-llm-proxy-manifestd-adapter-token' <<<"$proxyDep" && ok token-wired-proxy || fail token-wired-proxy
 adDep=$(awk 'BEGIN{RS="---\n"} /kind: Deployment/ && /name: r-llm-proxy-manifestd-cl\n/ {print}' <<<"$outS")
 grep -q 'type: Recreate' <<<"$adDep" && grep -q 'replicas: 1' <<<"$adDep" && grep -q 'name: ADAPTER_TOKEN' <<<"$adDep" && grep -q 'ADAPTER_LISTEN' <<<"$adDep" && grep -q 'readOnlyRootFilesystem: true' <<<"$adDep" && ! grep -q '^ *readinessProbe' <<<"$adDep" && ok adapter-deployment || fail adapter-deployment
+grep -q 'name: ADAPTER_SHUTDOWN_TIMEOUT' <<<"$adDep" && grep -q 'value: "595s"' <<<"$adDep" && grep -q 'sleep' <<<"$adDep" && ok adapter-graceful-shutdown || fail adapter-graceful-shutdown
 grep -qE 'upstream_url: http://r-llm-proxy-manifestd-cl:9100' <<<"$outS" && grep -qE 'upstream_url: http://r-llm-proxy-manifestd-cx:9101' <<<"$outS" && grep -q 'api_key: ${ADAPTER_TOKEN}' <<<"$outS" && ok separate-pools || fail separate-pools
 grep -q 'address: r-llm-proxy-manifestd-valkey:6379' <<<"$outS" && ok valkey-coordination-injected || fail valkey-coordination-injected
 grep -qE 'resourceNames: \["r-llm-proxy-manifestd-client-keys", "r-llm-proxy-manifestd-adapter-token"\]' <<<"$outS" && ok token-rbac || fail token-rbac
