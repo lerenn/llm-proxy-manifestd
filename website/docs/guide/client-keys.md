@@ -31,6 +31,7 @@ Empty or omitted `clients` means authentication is disabled (the previous behavi
 
 With the chart, set `config.clients` as above. The chart:
 
+- (with `adapters.mode: separate`, the same init container also creates the adapter token Secret: see [Rolling updates](/guide/rolling-updates))
 - runs a `keys-manager` init container (same image, binary `/keys-manager init`) before the proxy starts. It creates the Secret `<release>-client-keys` if absent and adds one random key (`llmp_` plus 40 random characters) for each client that has none. It never overwrites an existing key, drops the keys of clients removed from `config.clients`, retries on update conflicts and is idempotent. It logs client names only, never keys;
 - creates a ServiceAccount, a Role (`create` on secrets, plus `get`/`update`/`patch` limited by `resourceNames` to that one Secret) and a RoleBinding. The API token is mounted **only** in the init container (projected volume); the proxy and adapter containers have no Kubernetes API token;
 - mounts the Secret read-only (the volume is `optional`, since the Secret does not exist before the init container's first run on a fresh install; until the kubelet projects it, the proxy has no keys and rejects every client) into the proxy and the `check-config` init container, and renders `server.client_keys_dir` for you;

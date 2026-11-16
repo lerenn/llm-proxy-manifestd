@@ -30,6 +30,6 @@ func main() {
 	}
 	addr := env("ADAPTER_LISTEN", "127.0.0.1:9100")
 	log.Printf("adapter-codex listening on %s (codex home %s)", addr, srv.CodexHome)
-	hs := &http.Server{Addr: addr, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	hs := &http.Server{Addr: addr, Handler: common.RequireToken(os.Getenv("ADAPTER_TOKEN"), srv.Handler()), ReadHeaderTimeout: 10 * time.Second}
 	log.Fatal(hs.ListenAndServe())
 }

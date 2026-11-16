@@ -1,10 +1,8 @@
 <script setup lang="ts">
-// Edit this block to adjust the displayed values (real chart schema, see deploy/charts/.../values.yaml).
-const values = `providers:
-  claude-subscription:
-    type: claude
-    maxConcurrency: 4
-config:
+import { ref, computed } from 'vue'
+
+// Edit these blocks to adjust the displayed values (real chart schema, see deploy/charts/.../values.yaml).
+const common = `config:
   endpoints:
     anthropic:
       standard-medium:
@@ -21,18 +19,37 @@ dashboard:
   ingress:
     enabled: true
     host: dashboard.llm-proxy.example.com`
+const providers = `providers:
+  claude-subscription:
+    type: claude
+    maxConcurrency: 4
+`
+const sidecarValues = providers + common
+const separateValues = `adapters:
+  mode: separate        # one Deployment per subscription
+valkey:
+  enabled: true         # shared limiter/queue
+replicaCount: 2         # rolling update with surge
+` + providers + common
+
+const mode = ref<'sidecar' | 'separate'>('sidecar')
+const values = computed(() => (mode.value === 'sidecar' ? sidecarValues : separateValues))
 </script>
 
 <template>
   <section class="hpo" aria-label="Helm values and resulting pod">
+    <div class="hpo-tabs" role="tablist" aria-label="Topology">
+      <button role="tab" :aria-selected="mode === 'sidecar'" :class="{ on: mode === 'sidecar' }" @click="mode = 'sidecar'">Sidecar mode <small>(default)</small></button>
+      <button role="tab" :aria-selected="mode === 'separate'" :class="{ on: mode === 'separate' }" @click="mode = 'separate'">Separate adapters + Valkey <small>(rolling updates)</small></button>
+    </div>
     <div class="hpo-grid">
       <div class="hpo-col">
         <h3 class="hpo-title">values.yaml</h3>
         <pre class="hpo-code"><code>{{ values }}</code></pre>
       </div>
       <div class="hpo-col">
-        <h3 class="hpo-title">Resulting pod</h3>
-        <div class="hpo-diagram" role="img"
+        <h3 class="hpo-title">{{ mode === 'sidecar' ? 'Resulting pod' : 'Resulting pods' }}</h3>
+        <div v-if="mode === 'sidecar'" class="hpo-diagram" role="img"
           aria-label="Clients call the proxy container on port 8080. The proxy calls vendor APIs directly (API passthrough) or through CLI sidecars on localhost for subscription logins.">
           <div class="hpo-row hpo-ext">Clients (coding agents)</div>
           <div class="hpo-arrow">&darr; <small>:8080</small></div>
@@ -60,9 +77,41 @@ dashboard:
           <div class="hpo-arrow">&darr;</div>
           <div class="hpo-row hpo-ext">Vendor APIs (Anthropic, OpenAI)</div>
         </div>
+        <div v-else class="hpo-diagram" role="img"
+          aria-label="Clients call the proxy pods on port 8080, which roll with surge. The proxies share a Valkey pod for limits and queue, call vendor APIs directly, and call one separate adapter pod per subscription over the cluster network with a shared token.">
+          <div class="hpo-row hpo-ext">Clients (coding agents)</div>
+          <div class="hpo-arrow">&darr; <small>:8080</small></div>
+          <div class="hpo-pod">
+            <span class="hpo-pod-label">Proxy pods &times;N &middot; rolling update, surge 1</span>
+            <div class="hpo-box hpo-proxy">
+              <b>llm-proxy-manifestd</b>
+              <small>:8080 &middot; dashboard &middot; queues &middot; no PVC</small>
+              <div class="hpo-cm">ConfigMap (endpoints) mounted</div>
+            </div>
+          </div>
+          <div class="hpo-arrow">&darr; <small>limits &amp; queue</small> &nbsp; &darr; <small>Bearer token</small></div>
+          <div class="hpo-sidecars">
+            <div class="hpo-pod hpo-valkey">
+              <span class="hpo-pod-label">Valkey pod</span>
+              <div class="hpo-box">
+                <b>valkey</b>
+                <small>shared leases &amp; queue &middot; emptyDir &middot; optional</small>
+              </div>
+            </div>
+            <div class="hpo-pod">
+              <span class="hpo-pod-label">Adapter pod &times;1 per subscription</span>
+              <div class="hpo-box">
+                <b>claude / codex adapter</b>
+                <small>Recreate &middot; login on PVC &middot; token required</small>
+              </div>
+            </div>
+          </div>
+          <div class="hpo-arrow">&darr;</div>
+          <div class="hpo-row hpo-ext">Vendor APIs (Anthropic, OpenAI) &middot; API passthrough goes direct</div>
+        </div>
       </div>
     </div>
-    <p class="hpo-caption">Providers are either API passthrough pools or CLI sidecars for subscription logins. See <a href="/guide/subscription-providers">Subscription providers</a>.</p>
+    <p class="hpo-caption">Providers are either API passthrough pools or CLI adapters for subscription logins (sidecars, or separate pods with <code>adapters.mode: separate</code>). See <a href="/guide/subscription-providers">Subscription providers</a> and <a href="/guide/rolling-updates">Rolling updates</a>.</p>
   </section>
 </template>
 
@@ -72,6 +121,12 @@ dashboard:
 /* Same horizontal padding as VitePress's feature cards (.VPFeatures) so both blocks line up. */
 @media (min-width: 640px) { .hpo { padding-left: 48px; padding-right: 48px; } }
 @media (min-width: 960px) { .hpo { padding-left: 64px; padding-right: 64px; } }
+.hpo-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.hpo-tabs button { padding: 6px 12px; font-size: 13px; cursor: pointer; border-radius: 8px;
+  border: 1px solid var(--vp-c-divider); background: var(--vp-c-bg-soft); color: var(--vp-c-text-2); }
+.hpo-tabs button.on { border-color: var(--vp-c-brand-1); color: var(--vp-c-brand-1); background: var(--vp-c-brand-soft); }
+.hpo-tabs small { color: var(--vp-c-text-3); }
+.hpo-valkey { border-style: solid; border-width: 1px; }
 .hpo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
 @media (max-width: 768px) { .hpo-grid { grid-template-columns: 1fr; } }
 .hpo-col { min-width: 0; }

@@ -58,7 +58,7 @@ type meta struct {
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
-const usage = "usage: keys-manager init --config <path> --secret <name> [--namespace <ns>] [--label k=v]"
+const usage = "usage: keys-manager init [--config <path> --secret <name>] [--adapter-token-secret <name>] [--namespace <ns>] [--label k=v]"
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] != "init" {
@@ -79,19 +79,29 @@ func runInit(args []string, stdout, stderr io.Writer) int {
 	tokenFile := fs.String("token-file", saDir+"/token", "service account token file")
 	caFile := fs.String("ca-file", saDir+"/ca.crt", "CA bundle file")
 	nsFile := fs.String("namespace-file", saDir+"/namespace", "namespace file")
+	tokenSecret := fs.String("adapter-token-secret", "", "name of the Secret holding the shared adapter token (created if absent, never overwritten)")
 	var lbls labels
 	fs.Var(&lbls, "label", "label key=value for a created Secret (repeatable)")
 	if fs.Parse(args) != nil {
 		return 2
 	}
-	if *cfgPath == "" || *name == "" {
-		fmt.Fprintln(stderr, "keys-manager init: --config and --secret are required")
+	clientMode := *cfgPath != "" || *name != ""
+	if clientMode && (*cfgPath == "" || *name == "") {
+		fmt.Fprintln(stderr, "keys-manager init: --config and --secret go together")
 		return 2
 	}
-	cfg, err := config.LoadFile(*cfgPath)
-	if err != nil {
-		fmt.Fprintln(stderr, "keys-manager: config:", err)
-		return 1
+	if !clientMode && *tokenSecret == "" {
+		fmt.Fprintln(stderr, "keys-manager init: --config/--secret and/or --adapter-token-secret are required")
+		return 2
+	}
+	var cfg *config.Config
+	if clientMode {
+		var err error
+		cfg, err = config.LoadFile(*cfgPath)
+		if err != nil {
+			fmt.Fprintln(stderr, "keys-manager: config:", err)
+			return 1
+		}
 	}
 	if *ns == "" {
 		b, err := os.ReadFile(*nsFile)
@@ -117,23 +127,89 @@ func runInit(args []string, stdout, stderr io.Writer) int {
 		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}
 	}
 	k := &kube{base: strings.TrimRight(*api, "/"), ns: *ns, client: client, tokenFile: *tokenFile}
-	var names []string
-	for n := range cfg.Clients {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		err = reconcile(k, *name, names, lm, stdout)
-		if !errors.Is(err, errConflict) {
-			break
+	retry := func(f func() error) error {
+		var err error
+		for attempt := 1; attempt <= maxAttempts; attempt++ {
+			err = f()
+			if !errors.Is(err, errConflict) {
+				break
+			}
+			fmt.Fprintf(stdout, "keys-manager: conflict, retrying (%d/%d)\n", attempt, maxAttempts)
 		}
-		fmt.Fprintf(stdout, "keys-manager: conflict, retrying (%d/%d)\n", attempt, maxAttempts)
+		return err
 	}
-	if err != nil {
-		fmt.Fprintln(stderr, "keys-manager:", err)
-		return 1
+	if *tokenSecret != "" {
+		if err := retry(func() error { return ensureToken(k, *tokenSecret, lm, stdout) }); err != nil {
+			fmt.Fprintln(stderr, "keys-manager:", err)
+			return 1
+		}
+	}
+	if clientMode {
+		var names []string
+		for n := range cfg.Clients {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		if err := retry(func() error { return reconcile(k, *name, names, lm, stdout) }); err != nil {
+			fmt.Fprintln(stderr, "keys-manager:", err)
+			return 1
+		}
 	}
 	return 0
+}
+
+// tokenKey is the data key of the adapter token Secret.
+const tokenKey = "token"
+
+// ensureToken creates the adapter token Secret with a random token if it is
+// absent (or lacks the key). An existing token is never overwritten.
+func ensureToken(k *kube, name string, lbls map[string]string, out io.Writer) error {
+	path := "/api/v1/namespaces/" + k.ns + "/secrets"
+	code, body, err := k.do(http.MethodGet, path+"/"+name, nil)
+	if err != nil {
+		return err
+	}
+	var s secret
+	exists := code == http.StatusOK
+	switch {
+	case exists:
+		if err := json.Unmarshal(body, &s); err != nil {
+			return fmt.Errorf("decode secret: %w", err)
+		}
+		if len(s.Data[tokenKey]) > 0 {
+			fmt.Fprintln(out, "keys-manager: adapter token up to date")
+			return nil
+		}
+	case code == http.StatusNotFound:
+		s = secret{APIVersion: "v1", Kind: "Secret", Type: "Opaque",
+			Metadata: meta{Name: name, Namespace: k.ns, Labels: lbls}}
+	default:
+		return fmt.Errorf("get secret: HTTP %d", code)
+	}
+	tok, err := newKey()
+	if err != nil {
+		return err
+	}
+	if s.Data == nil {
+		s.Data = map[string]string{}
+	}
+	s.Data[tokenKey] = base64.StdEncoding.EncodeToString([]byte(tok))
+	method, p := http.MethodPost, path
+	if exists {
+		method, p = http.MethodPut, path+"/"+name
+	}
+	code, _, err = k.do(method, p, s)
+	if err != nil {
+		return err
+	}
+	switch {
+	case code == http.StatusConflict:
+		return errConflict // lost a race: the next attempt sees the winner's token
+	case code >= 200 && code < 300:
+		fmt.Fprintf(out, "keys-manager: adapter token secret %q written\n", name)
+		return nil
+	}
+	return fmt.Errorf("write secret: HTTP %d", code)
 }
 
 var errConflict = errors.New("conflict")

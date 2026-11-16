@@ -29,6 +29,9 @@ type ProviderStatus struct {
 // SidecarState runs the sidecar's ready check (`adapter-<type> ready`) in its
 // container: exit 0 means logged in, a non-zero exit not logged in.
 func SidecarState(ctx context.Context, ex Executor, namespace, pod string, p Provider) string {
+	if p.Pod != "" {
+		pod = p.Pod
+	}
 	ctx, cancel := context.WithTimeout(ctx, readyTimeout)
 	defer cancel()
 	err := ex.Exec(ctx, ExecRequest{
@@ -63,7 +66,11 @@ func Status(ctx context.Context, t *Target, ex Executor, w, errw io.Writer) erro
 	}
 
 	var rows []ProviderStatus
-	for _, p := range SidecarProviders(pod) {
+	adapters, err := t.Adapters(ctx, pod)
+	if err != nil {
+		return err
+	}
+	for _, p := range adapters {
 		rows = append(rows, ProviderStatus{Provider: p, State: SidecarState(ctx, ex, t.Namespace, pod.Name, p)})
 	}
 	if groups := cfg.APIGroups(); len(groups) > 0 {

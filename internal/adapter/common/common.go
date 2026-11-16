@@ -2,6 +2,7 @@
 package common
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"net/http"
 	"os"
@@ -47,4 +48,30 @@ func Probe(addr string) int {
 		return 1
 	}
 	return 0
+}
+
+// RequireToken wraps h so every request except GET /ready must carry
+// "Authorization: Bearer <token>" (compared in constant time); otherwise it
+// answers 401. An empty token disables the check (sidecar mode: loopback only).
+// Both adapters use this single header, whatever the protocol they speak.
+func RequireToken(token string, h http.Handler) http.Handler {
+	if token == "" {
+		return h
+	}
+	want := []byte(token)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/ready" {
+			h.ServeHTTP(w, r)
+			return
+		}
+		got, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if !ok || subtle.ConstantTimeCompare([]byte(got), want) != 1 {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":{"type":"authentication_error","message":"missing or invalid adapter token"}}` + "\n"))
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
 }

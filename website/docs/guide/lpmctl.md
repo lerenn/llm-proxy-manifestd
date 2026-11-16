@@ -47,6 +47,8 @@ With a client name the output is exactly the key, so it is safe to pipe or captu
 
 ## `lpmctl status`
 
+With `adapters.mode: separate` ([Rolling updates](/guide/rolling-updates)) the adapters run in their own pods (label `app.kubernetes.io/component=adapter`); `status` and `login` find them there and exec into them, so the output is the same as in sidecar mode.
+
 ```sh
 $ lpmctl status
 Release proxy in namespace llm, pod proxy-llm-proxy-manifestd-6c9f7d-x2k4q (Running)

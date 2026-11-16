@@ -1,0 +1,116 @@
+{{- /*
+  adapters.mode=separate: one Deployment + Service per subscription provider (claude/codex).
+  Single replica, Recreate (ReadWriteOnce login volume), never gating the proxy's readiness.
+  Pods carry a DIFFERENT app.kubernetes.io/name than the proxy so the proxy Deployment/Service
+  selectors never match them. Requests need the shared token (Authorization: Bearer).
+*/ -}}
+{{- if include "llm-proxy-manifestd.separate" . }}
+{{- range (include "llm-proxy-manifestd.providers" . | fromJsonArray) }}
+{{- if .sidecar }}
+{{- $a := .provider }}
+{{- $ad := get $.Values.adapters .type }}
+{{- $img := $ad.image }}
+{{- $full := printf "%s-%s" (include "llm-proxy-manifestd.fullname" $) .name }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $full }}
+  labels:
+    {{- include "llm-proxy-manifestd.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: adapter
+    llm-proxy-manifestd/provider: {{ .name }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "llm-proxy-manifestd.name" $ }}-adapter
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+      llm-proxy-manifestd/provider: {{ .name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "llm-proxy-manifestd.name" $ }}-adapter
+        app.kubernetes.io/instance: {{ $.Release.Name }}
+        app.kubernetes.io/component: adapter
+        llm-proxy-manifestd/provider: {{ .name }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: {{ $.Values.terminationGracePeriodSeconds }}
+      containers:
+        - name: {{ .name }}
+          image: "{{ $img.repository }}:{{ $img.tag | default $.Chart.AppVersion }}"
+          imagePullPolicy: {{ $img.pullPolicy }}
+          env:
+            - name: ADAPTER_TYPE
+              value: {{ .type | quote }}
+            - name: ADAPTER_LISTEN
+              value: "0.0.0.0:{{ .port }}"
+            - name: ADAPTER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "llm-proxy-manifestd.adapterTokenSecret" $ }}
+                  key: token
+                  optional: false
+            - name: {{ .homeEnv }}
+              value: {{ .dataDir }}
+            {{- with $a.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .port }}
+              protocol: TCP
+          # No readinessProbe on purpose: the adapter must not gate anything
+          # (`adapter-<type> ready` is used by lpmctl status).
+          securityContext:
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          {{- with ($a.resources | default $ad.resources) }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: login
+              mountPath: {{ .dataDir }}
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: login
+          persistentVolumeClaim:
+            claimName: {{ $full }}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $full }}
+  labels:
+    {{- include "llm-proxy-manifestd.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: adapter
+    llm-proxy-manifestd/provider: {{ .name }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: {{ include "llm-proxy-manifestd.name" $ }}-adapter
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    llm-proxy-manifestd/provider: {{ .name }}
+{{- end }}
+{{- end }}
+{{- end }}

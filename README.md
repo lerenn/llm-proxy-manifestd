@@ -80,7 +80,7 @@ The image also contains `/checker`, which validates a manifest with the proxy's 
 
 ## Subscription providers (CLI adapters)
 
-To use a Claude subscription login, define `providers:` in the Helm values. Each provider becomes a loopback-only adapter sidecar (Anthropic Messages API, one per provider, its own pool), a PVC for the login and a matching pool, and the pod switches to `replicas: 1` / `Recreate`.
+To use a Claude subscription login, define `providers:` in the Helm values. Each provider becomes a loopback-only adapter sidecar (Anthropic Messages API, one per provider, its own pool), a PVC for the login and a matching pool, and the pod switches to `replicas: 1` / `Recreate`. For rolling updates with surge, set `adapters.mode: separate` (one token-protected Deployment per subscription) and `valkey.enabled: true` (shared limiter/queue): see [Rolling updates](https://llm-proxy-manifestd.lerenn.dev/guide/rolling-updates).
 
 ```yaml
 providers:

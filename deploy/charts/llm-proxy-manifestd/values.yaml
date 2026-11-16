@@ -8,6 +8,8 @@ image:
 # so ${VAR} references in `config` are resolved at load time.
 existingSecret: ""
 
+# Proxy replicas. Without subscription providers (claude/codex) any value is allowed (RollingUpdate).
+# With them, >1 is allowed only in the "rolling" topology (see "Rolling updates" below), else render error.
 replicaCount: 1
 
 # Pods get this long to finish in-flight streams on shutdown.
@@ -98,7 +100,21 @@ providerStorage:
   size: 1Gi
   storageClass: ""
 
+# Rolling updates (proxy Deployment strategy), decided by where the subscription adapters run and
+# whether a shared limiter/queue exists:
+#   - no claude/codex provider ........................ RollingUpdate (surge 1, unavailable 0), replicaCount replicas
+#   - adapters.mode=sidecar + claude/codex ............ replicas 1, Recreate (RWO login volumes in the proxy pod)
+#   - adapters.mode=separate, no shared limiter ....... replicas 1, Recreate (a surge pod would double the limits)
+#   - adapters.mode=separate AND (valkey.enabled or config.coordination set)
+#         ............................................. RollingUpdate (surge 1, unavailable 0), replicaCount replicas
+# `separate`: each claude/codex provider gets its own Deployment (1 replica, Recreate, its login PVC)
+# and ClusterIP Service <fullname>-<provider>; the proxy pod then has no PVC and no adapter container.
+# Adapters then listen on the pod IP, so they REQUIRE a shared token: the keys-manager init container
+# creates the Secret <fullname>-adapter-token (key `token`, never overwritten), the proxy sends it as
+# the pools' api key (Authorization: Bearer) and the adapters reject anything else with 401 (/ready
+# excepted). Sidecar mode is unchanged (loopback, no token). Adapters never gate the proxy's readiness.
 adapters:
+  mode: sidecar   # sidecar | separate
   claude:
     image:
       repository: ghcr.io/lerenn/llm-proxy-manifestd-adapter-claude
@@ -112,6 +128,22 @@ adapters:
       tag: ""
       pullPolicy: IfNotPresent
     resources: {}
+
+# Optional Valkey (shared limiter/queue across proxy replicas, needed for the "rolling" topology above).
+# Renders one Deployment (1 replica, Recreate, hardened, emptyDir: state loss is acceptable, leases
+# expire) and a ClusterIP Service <fullname>-valkey, and injects coordination.valkey.address
+# (+ password_env) into the config unless you set `config.coordination` yourself. Downsides: it is a
+# single point of failure (see coordination.valkey.fail_mode), a restart loses leases and queue, and
+# old/new proxies share it during a rollout.
+valkey:
+  enabled: false
+  image:
+    repository: valkey/valkey
+    tag: "8.1.11"
+    pullPolicy: IfNotPresent
+  resources: {}
+  # Optional password: exposed as VALKEY_PASSWORD to the proxy and used as --requirepass (never in args).
+  existingSecret: {}   # {name: my-secret, key: password}
 
 # Client API keys: when `config.clients` has at least one entry, every /v1/ call
 # (and /status) needs a key (`x-api-key: <key>` or `Authorization: Bearer <key>`).

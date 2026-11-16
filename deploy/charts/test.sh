@@ -80,4 +80,53 @@ out5=$(full "$(v q "providers: {c: {type: claude}}")")
 out4=$(full "$(v p "{}")")
 ! grep -qE 'keys-manager|kind: Role|client-keys' <<<"$out4" && ok no-clients-no-init || fail no-clients-no-init
 
+# --- adapters.mode=separate + valkey (rolling updates) ---
+sep="adapters: {mode: separate}
+providers: {cl: {type: claude, maxConcurrency: 2}, cx: {type: codex}}"
+vk="valkey: {enabled: true}"
+outS=$(full "$(v s1 "$sep
+$vk
+replicaCount: 2
+config: {clients: {a: {}}}")") || fail "separate render"
+nd=$(grep -c '^kind: Deployment' <<<"$outS"); [ "$nd" -eq 4 ] && ok separate-deployments || fail "separate-deployments ($nd)"
+for n in r-llm-proxy-manifestd-cl r-llm-proxy-manifestd-cx r-llm-proxy-manifestd-valkey; do grep -q "^  name: $n\$" <<<"$outS" || fail "separate-object $n"; done; ok separate-objects
+proxyDep=$(awk 'BEGIN{RS="---\n"} /kind: Deployment/ && /name: r-llm-proxy-manifestd\n/ {print}' <<<"$outS")
+grep -q 'type: RollingUpdate' <<<"$proxyDep" && grep -q 'maxSurge: 1' <<<"$proxyDep" && grep -q 'maxUnavailable: 0' <<<"$proxyDep" && grep -q 'replicas: 2' <<<"$proxyDep" && ok rolling-update-conditions || fail rolling-update-conditions
+! grep -qE 'persistentVolumeClaim|name: ADAPTER_TYPE|name: cl$' <<<"$proxyDep" && ok proxy-no-pvc-no-sidecar || fail proxy-no-pvc-no-sidecar
+grep -q 'name: ADAPTER_TOKEN' <<<"$proxyDep" && grep -q 'adapter-token' <<<"$proxyDep" && grep -q -- '--adapter-token-secret=r-llm-proxy-manifestd-adapter-token' <<<"$proxyDep" && ok token-wired-proxy || fail token-wired-proxy
+adDep=$(awk 'BEGIN{RS="---\n"} /kind: Deployment/ && /name: r-llm-proxy-manifestd-cl\n/ {print}' <<<"$outS")
+grep -q 'type: Recreate' <<<"$adDep" && grep -q 'replicas: 1' <<<"$adDep" && grep -q 'name: ADAPTER_TOKEN' <<<"$adDep" && grep -q 'ADAPTER_LISTEN' <<<"$adDep" && grep -q 'readOnlyRootFilesystem: true' <<<"$adDep" && ! grep -q '^ *readinessProbe' <<<"$adDep" && ok adapter-deployment || fail adapter-deployment
+grep -qE 'upstream_url: http://r-llm-proxy-manifestd-cl:9100' <<<"$outS" && grep -qE 'upstream_url: http://r-llm-proxy-manifestd-cx:9101' <<<"$outS" && grep -q 'api_key: ${ADAPTER_TOKEN}' <<<"$outS" && ok separate-pools || fail separate-pools
+grep -q 'address: r-llm-proxy-manifestd-valkey:6379' <<<"$outS" && ok valkey-coordination-injected || fail valkey-coordination-injected
+grep -qE 'resourceNames: \["r-llm-proxy-manifestd-client-keys", "r-llm-proxy-manifestd-adapter-token"\]' <<<"$outS" && ok token-rbac || fail token-rbac
+# adapter pods must never match the proxy selector
+! grep -A3 'selector:' <<<"$adDep" | grep -q 'name: llm-proxy-manifestd$' && ok adapter-labels-distinct || fail adapter-labels-distinct
+# valkey password: env + requirepass from env, never argv; proxy gets VALKEY_PASSWORD
+outV=$(full "$(v s2 "$vk
+valkey: {enabled: true, existingSecret: {name: vs, key: pw}}")")
+grep -q 'password_env: VALKEY_PASSWORD' <<<"$outV" && grep -q 'name: VALKEY_PASSWORD' <<<"$outV" && grep -q -- '--requirepass \\"$VALKEY_PASSWORD\\"' <<<"$outV" && ok valkey-password || fail valkey-password
+grep -q 'image: "valkey/valkey:8' <<<"$outV" && ! grep -q 'valkey/valkey:latest' <<<"$outV" && ok valkey-pinned || fail valkey-pinned
+# user-set config.coordination wins over the injected one
+outC=$(full "$(v s3 "$vk
+config: {coordination: {valkey: {address: 'my:6379'}}}")")
+grep -q 'address: my:6379' <<<"$outC" && ! grep -q -- '-valkey:6379' <<<"$outC" && ok coordination-user-wins || fail coordination-user-wins
+# separate without a shared limiter: single replica, Recreate
+outN=$(full "$(v s4 "$sep")"); pN=$(awk 'BEGIN{RS="---\n"} /kind: Deployment/ && /name: r-llm-proxy-manifestd\n/ {print}' <<<"$outN")
+grep -q 'type: Recreate' <<<"$pN" && grep -q 'replicas: 1' <<<"$pN" && ok separate-no-limiter-recreate || fail separate-no-limiter-recreate
+# config.coordination alone enables rolling
+outR=$(full "$(v s5 "$sep
+config: {coordination: {valkey: {address: 'my:6379'}}}")"); pR=$(awk 'BEGIN{RS="---\n"} /kind: Deployment/ && /name: r-llm-proxy-manifestd\n/ {print}' <<<"$outR")
+grep -q 'type: RollingUpdate' <<<"$pR" && ok coordination-rolling || fail coordination-rolling
+# sidecar mode untouched
+outSC=$(full "$(v s6 "providers: {cl: {type: claude}}")"); pSC=$(awk 'BEGIN{RS="---\n"} /kind: Deployment/ && /name: r-llm-proxy-manifestd\n/ {print}' <<<"$outSC")
+grep -q 'type: Recreate' <<<"$pSC" && grep -q 'ADAPTER_LISTEN' <<<"$pSC" && grep -q '127.0.0.1:9100' <<<"$pSC" && ! grep -q 'adapter-token\|ADAPTER_TOKEN' <<<"$outSC" && ok sidecar-mode-unchanged || fail sidecar-mode-unchanged
+# render errors
+errc() { local o; o=$(full "$2") && { fail "$1 (should fail)"; return; }; grep -qF "$3" <<<"$o" && ok "$1" || fail "$1 (wrong error: $o)"; }
+errc bad-mode "$(v e1 "adapters: {mode: nope}")" 'adapters.mode must be'
+errc replicas-sidecar "$(v e2 "replicaCount: 2
+providers: {cl: {type: claude}}")" 'replicaCount > 1'
+errc replicas-no-limiter "$(v e3 "replicaCount: 2
+$sep")" 'replicaCount > 1'
+
+
 [ "$fails" -eq 0 ] || { echo "$fails failure(s)"; exit 1; }

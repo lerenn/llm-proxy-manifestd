@@ -1,6 +1,6 @@
 {{- if include "llm-proxy-manifestd.keysManager" . }}
 {{- /*
-  The client keys Secret itself is NOT rendered: the keys-manager init container
+  The client keys / adapter token Secrets themselves are NOT rendered: the keys-manager init container
   creates it (and fills in missing keys), so Helm/Argo CD never own or prune it.
 */ -}}
 apiVersion: v1
@@ -24,7 +24,7 @@ rules:
     verbs: ["create"]
   - apiGroups: [""]
     resources: ["secrets"]
-    resourceNames: [{{ include "llm-proxy-manifestd.clientKeysSecret" . | quote }}]
+    resourceNames: [{{- if include "llm-proxy-manifestd.clientKeysManager" . }}{{ include "llm-proxy-manifestd.clientKeysSecret" . | quote }}{{- end }}{{- if and (include "llm-proxy-manifestd.clientKeysManager" .) (include "llm-proxy-manifestd.separate" .) }}, {{ end }}{{- if include "llm-proxy-manifestd.separate" . }}{{ include "llm-proxy-manifestd.adapterTokenSecret" . | quote }}{{- end }}]
     verbs: ["get", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

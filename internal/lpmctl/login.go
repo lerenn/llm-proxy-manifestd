@@ -55,7 +55,10 @@ func Login(ctx context.Context, t *Target, ex Executor, name string, o LoginOpti
 		return err
 	}
 	var prov *Provider
-	sidecars := SidecarProviders(pod)
+	sidecars, err := t.Adapters(ctx, pod)
+	if err != nil {
+		return err
+	}
 	for i := range sidecars {
 		if sidecars[i].Name == name {
 			prov = &sidecars[i]
@@ -95,8 +98,12 @@ func Login(ctx context.Context, t *Target, ex Executor, name string, o LoginOpti
 	if !o.TTY {
 		return fmt.Errorf("login is interactive: run lpmctl login from a terminal")
 	}
+	target := pod.Name
+	if prov.Pod != "" {
+		target = prov.Pod
+	}
 	if o.Stderr != nil {
-		fmt.Fprintf(o.Stderr, "Logging in provider %s (type %s) in pod %s, container %s: %s\n", name, prov.Type, pod.Name, prov.Name, strings.Join(cmd, " "))
+		fmt.Fprintf(o.Stderr, "Logging in provider %s (type %s) in pod %s, container %s: %s\n", name, prov.Type, target, prov.Name, strings.Join(cmd, " "))
 		if known && len(o.Command) == 0 {
 			fmt.Fprintf(o.Stderr, "%s\n\n", flow.Hint)
 		}
@@ -111,7 +118,7 @@ func Login(ctx context.Context, t *Target, ex Executor, name string, o LoginOpti
 		}
 	}
 	return ex.Exec(ctx, ExecRequest{
-		Namespace: t.Namespace, Pod: pod.Name, Container: prov.Name,
+		Namespace: t.Namespace, Pod: target, Container: prov.Name,
 		Command: cmd,
 		Stdin:   o.Stdin, Stdout: o.Stdout, Stderr: o.Stderr,
 		TTY:       true,

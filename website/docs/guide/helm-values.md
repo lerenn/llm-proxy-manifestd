@@ -8,7 +8,10 @@ Chart: `oci://ghcr.io/lerenn/charts/llm-proxy-manifestd`.
 | `image.tag` | `""` (chart `appVersion`) | Image tag. |
 | `image.pullPolicy` | `IfNotPresent` | Pull policy. |
 | `existingSecret` | `""` | Secret exposed with `envFrom`, so `${VAR}` in the manifest resolve. |
-| `replicaCount` | `1` | Replicas. See the note below. |
+| `replicaCount` | `1` | Replicas. See the note below and [Rolling updates](/guide/rolling-updates). |
+| `adapters.mode` | `sidecar` | `separate` runs each subscription adapter in its own Deployment (token-protected). See [Rolling updates](/guide/rolling-updates). |
+| `valkey.enabled` | `false` | Shared limiter/queue backend (one Valkey pod); with `adapters.mode: separate` it enables rolling updates. |
+| `valkey.image`, `valkey.resources`, `valkey.existingSecret` | pinned `valkey/valkey`, `{}`, `{}` | Image, resources and optional password Secret (`name`, `key`). |
 | `terminationGracePeriodSeconds` | `600` | Time given to in-flight streams on shutdown. |
 | `resources` | `{}` | Container resources. |
 | `service.type` / `service.port` | `ClusterIP` / `80` | Service settings. |
