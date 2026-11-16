@@ -154,6 +154,9 @@ type Provider struct {
 	// ReadyCommand is the sidecar's readiness command (e.g.
 	// /usr/local/bin/adapter-claude ready).
 	ReadyCommand []string
+	// Pod is the pod running the adapter when it is NOT the proxy pod
+	// (adapters.mode=separate). Empty = the proxy pod (sidecar mode).
+	Pod string
 	// SecretName/SecretKey locate an API provider's key (never read).
 	SecretName, SecretKey string
 }
@@ -183,6 +186,56 @@ func SidecarProviders(pod *corev1.Pod) []Provider {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+const (
+	labelComponent = "app.kubernetes.io/component"
+	labelProvider  = "llm-proxy-manifestd/provider"
+	componentAdapt = "adapter"
+)
+
+// Adapters returns every CLI adapter of the release: the sidecars of the
+// proxy pod (adapters.mode=sidecar) and the adapter pods of
+// adapters.mode=separate (label app.kubernetes.io/component=adapter, container
+// carrying ADAPTER_TYPE), the newest usable pod per provider. Sorted by name.
+func (t *Target) Adapters(ctx context.Context, proxy *corev1.Pod) ([]Provider, error) {
+	var out []Provider
+	for _, p := range SidecarProviders(proxy) {
+		p.Pod = proxy.Name
+		out = append(out, p)
+	}
+	sel := fmt.Sprintf("%s=%s,%s=%s", labelComponent, componentAdapt, labelInstance, t.Release)
+	pods, err := t.Client.CoreV1().Pods(t.Namespace).List(ctx, metav1.ListOptions{LabelSelector: sel})
+	if err != nil {
+		return nil, fmt.Errorf("list adapter pods of release %q: %w", t.Release, err)
+	}
+	items := pods.Items
+	sort.SliceStable(items, func(i, j int) bool {
+		ri, rj := usable(&items[i]), usable(&items[j])
+		if ri != rj {
+			return ri
+		}
+		return items[j].CreationTimestamp.Before(&items[i].CreationTimestamp)
+	})
+	seen := map[string]bool{}
+	for i := range items {
+		pod := &items[i]
+		key := pod.Labels[labelProvider]
+		for _, p := range SidecarProviders(pod) {
+			k := key
+			if k == "" {
+				k = p.Name
+			}
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+			p.Pod = pod.Name
+			out = append(out, p)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
 }
 
 // APIProviders returns the API-key providers, found from the proxy

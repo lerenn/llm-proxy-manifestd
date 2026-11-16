@@ -1,0 +1,96 @@
+{{- if (.Values.valkey).enabled }}
+{{- $v := .Values.valkey }}
+{{- $name := include "llm-proxy-manifestd.valkeyName" . }}
+{{- $sel := dict "app.kubernetes.io/name" (printf "%s-valkey" (include "llm-proxy-manifestd.name" .)) "app.kubernetes.io/instance" .Release.Name }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "llm-proxy-manifestd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: valkey
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- toYaml $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- toYaml $sel | nindent 8 }}
+        app.kubernetes.io/component: valkey
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: valkey
+          image: "{{ $v.image.repository }}:{{ $v.image.tag }}"
+          imagePullPolicy: {{ $v.image.pullPolicy }}
+          {{- if ($v.existingSecret).name }}
+          # The password comes from the environment and is passed through a shell
+          # variable expansion at start: it never appears in the pod spec args.
+          command: ["sh", "-c", "exec valkey-server --save '' --appendonly no --requirepass \"$VALKEY_PASSWORD\""]
+          env:
+            - name: VALKEY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $v.existingSecret.name }}
+                  key: {{ $v.existingSecret.key | default "password" }}
+                  optional: false
+          {{- else }}
+          args: ["--save", "", "--appendonly", "no"]
+          {{- end }}
+          ports:
+            - name: valkey
+              containerPort: 6379
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: valkey
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: valkey
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          {{- with $v.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        # State loss is acceptable: leases expire and the queue is rebuilt.
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "llm-proxy-manifestd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: valkey
+spec:
+  type: ClusterIP
+  ports:
+    - name: valkey
+      port: 6379
+      targetPort: valkey
+      protocol: TCP
+  selector:
+    {{- toYaml $sel | nindent 4 }}
+{{- end }}

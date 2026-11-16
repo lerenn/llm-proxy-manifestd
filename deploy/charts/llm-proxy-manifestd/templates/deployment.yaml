@@ -4,7 +4,13 @@
 */ -}}
 {{- $providers := include "llm-proxy-manifestd.providers" . | fromJsonArray -}}
 {{- $sidecars := list -}}
-{{- range $providers }}{{- if .sidecar }}{{- $sidecars = append $sidecars . }}{{- end }}{{- end -}}
+{{- $inPod := include "llm-proxy-manifestd.inPodAdapters" . -}}
+{{- $separate := include "llm-proxy-manifestd.separate" . -}}
+{{- $rollout := include "llm-proxy-manifestd.rollout" . -}}
+{{- if $inPod }}{{- range $providers }}{{- if .sidecar }}{{- $sidecars = append $sidecars . }}{{- end }}{{- end }}{{- end -}}
+{{- if and (gt (int .Values.replicaCount) 1) (ne $rollout "plain") (ne $rollout "rolling") -}}
+{{- fail "replicaCount > 1 with subscription providers (claude/codex) needs adapters.mode=separate AND a shared limiter (valkey.enabled or config.coordination); otherwise the proxy stays at 1 replica" -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -15,6 +21,12 @@ spec:
   {{- if $sidecars }}
   # Sidecar providers hold a login on a ReadWriteOnce volume: exactly one pod, and the
   # old pod must be gone before the new one starts (brief outage on rollout).
+  replicas: 1
+  strategy:
+    type: Recreate
+  {{- else if eq $rollout "single" }}
+  # Separate adapters but no shared limiter (valkey.enabled / config.coordination): a surge pod would
+  # double the per-pod concurrency limits, so keep one pod and no overlap.
   replicas: 1
   strategy:
     type: Recreate
@@ -41,7 +53,7 @@ spec:
       # No API token in the main/adapter containers; keys-manager gets its own projected one.
       automountServiceAccountToken: false
       {{- end }}
-      {{- if $sidecars }}
+      {{- if or $sidecars $separate }}
       securityContext:
         runAsNonRoot: true
         fsGroup: 10001
@@ -60,8 +72,13 @@ spec:
           command: ["/keys-manager"]
           args:
             - init
+            {{- if include "llm-proxy-manifestd.clientKeysManager" . }}
             - --config=/etc/llm-proxy-manifestd/config.yaml
             - --secret={{ include "llm-proxy-manifestd.clientKeysSecret" . }}
+            {{- end }}
+            {{- if $separate }}
+            - --adapter-token-secret={{ include "llm-proxy-manifestd.adapterTokenSecret" . }}
+            {{- end }}
             - --namespace={{ .Release.Namespace }}
             {{- range $k, $v := (include "llm-proxy-manifestd.labels" . | fromYaml) }}
             - --label={{ $k }}={{ $v }}
@@ -122,8 +139,26 @@ spec:
           {{- end }}
           {{- $apis := list }}
           {{- range $providers }}{{- if not .sidecar }}{{- $apis = append $apis . }}{{- end }}{{- end }}
-          {{- if $apis }}
+          {{- if or $apis $separate (and (.Values.valkey).enabled (.Values.valkey.existingSecret).name) }}
           env:
+            {{- if $separate }}
+            # Shared adapter token (created by the keys-manager init container), sent to the
+            # adapters as the pools' upstream api key (Authorization: Bearer).
+            - name: ADAPTER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "llm-proxy-manifestd.adapterTokenSecret" . }}
+                  key: token
+                  optional: false
+            {{- end }}
+            {{- if and (.Values.valkey).enabled (.Values.valkey.existingSecret).name }}
+            - name: VALKEY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.valkey.existingSecret.name }}
+                  key: {{ .Values.valkey.existingSecret.key | default "password" }}
+                  optional: false
+            {{- end }}
             {{- range $apis }}
             - name: {{ .envName }}
               valueFrom:
@@ -156,7 +191,7 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if $sidecars }}
+          {{- if or $sidecars $separate }}
           securityContext:
             runAsUser: 65532
             allowPrivilegeEscalation: false

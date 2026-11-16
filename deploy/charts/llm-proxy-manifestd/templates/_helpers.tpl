@@ -138,6 +138,58 @@ provider sets `port` explicitly.
 {{- end -}}
 
 {{/* The chart creates and maintains the client keys Secret (init container + RBAC). */}}
-{{- define "llm-proxy-manifestd.keysManager" -}}
+{{- define "llm-proxy-manifestd.clientKeysManager" -}}
 {{- if and (include "llm-proxy-manifestd.clientKeysEnabled" .) (not .Values.clientsExistingSecret) -}}true{{- end -}}
+{{- end -}}
+
+{{/* adapters.mode, validated. */}}
+{{- define "llm-proxy-manifestd.adaptersMode" -}}
+{{- $m := (.Values.adapters).mode | default "sidecar" -}}
+{{- if not (has $m (list "sidecar" "separate")) -}}
+{{- fail (printf "adapters.mode must be sidecar or separate (got %q)" $m) -}}
+{{- end -}}
+{{- $m -}}
+{{- end -}}
+
+{{/* "true" when subscription providers run in their own Deployments (adapters.mode=separate and at least one claude/codex provider). */}}
+{{- define "llm-proxy-manifestd.separate" -}}
+{{- if eq (include "llm-proxy-manifestd.adaptersMode" .) "separate" -}}
+{{- range (include "llm-proxy-manifestd.providers" . | fromJsonArray) -}}{{- if .sidecar -}}true{{- end -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* "true" when adapter sidecars live in the proxy pod (adapters.mode=sidecar and at least one claude/codex provider). */}}
+{{- define "llm-proxy-manifestd.inPodAdapters" -}}
+{{- if eq (include "llm-proxy-manifestd.adaptersMode" .) "sidecar" -}}
+{{- range (include "llm-proxy-manifestd.providers" . | fromJsonArray) -}}{{- if .sidecar -}}true{{- end -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Shared limiter/queue backend configured: the chart's Valkey or a user-set config.coordination. */}}
+{{- define "llm-proxy-manifestd.coordination" -}}
+{{- if or (.Values.valkey).enabled .Values.config.coordination -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+Proxy rollout shape (see values.yaml "Rolling updates"): "rolling" only when adapters are separate AND
+a shared limiter is configured; "single" (replicas 1, Recreate) when adapters live in the pod, or in separate
+mode without a shared limiter; "plain" (replicaCount + RollingUpdate, as before) with no subscription provider.
+*/}}
+{{- define "llm-proxy-manifestd.rollout" -}}
+{{- if include "llm-proxy-manifestd.inPodAdapters" . -}}single
+{{- else if include "llm-proxy-manifestd.separate" . -}}{{ ternary "rolling" "single" (not (not (include "llm-proxy-manifestd.coordination" .))) }}
+{{- else -}}plain{{- end -}}
+{{- end -}}
+
+{{- define "llm-proxy-manifestd.adapterTokenSecret" -}}
+{{ include "llm-proxy-manifestd.fullname" . }}-adapter-token
+{{- end -}}
+
+{{- define "llm-proxy-manifestd.valkeyName" -}}
+{{ include "llm-proxy-manifestd.fullname" . }}-valkey
+{{- end -}}
+
+{{/* keys-manager init container: client keys and/or adapter token. */}}
+{{- define "llm-proxy-manifestd.keysManager" -}}
+{{- if or (include "llm-proxy-manifestd.clientKeysManager" .) (include "llm-proxy-manifestd.separate" .) -}}true{{- end -}}
 {{- end -}}

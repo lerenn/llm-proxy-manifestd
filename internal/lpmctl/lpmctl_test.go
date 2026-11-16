@@ -287,3 +287,54 @@ func TestLogin(t *testing.T) {
 		t.Fatalf("no tty: %v", err)
 	}
 }
+
+// separateObjects: adapters.mode=separate: a proxy pod without sidecars and
+// one adapter pod per subscription provider (plus a stale terminating one).
+func separateObjects() []runtime.Object {
+	proxy := releasePod("proxy-0", "proxy", corev1.PodRunning, time.Unix(100, 0))
+	proxy.Spec.Containers = proxy.Spec.Containers[:1]
+	adapter := func(name, prov, typ string, phase corev1.PodPhase, created int64) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, CreationTimestamp: metav1.NewTime(time.Unix(created, 0)),
+				Labels: map[string]string{labelName: ChartName + "-adapter", labelInstance: "proxy", labelComponent: componentAdapt, labelProvider: prov}},
+			Spec:   corev1.PodSpec{Containers: []corev1.Container{sidecar(prov, typ)}},
+			Status: corev1.PodStatus{Phase: phase},
+		}
+	}
+	return []runtime.Object{proxy,
+		adapter("claude-sub-new", "claude-sub", "claude", corev1.PodRunning, 200),
+		adapter("claude-sub-old", "claude-sub", "claude", corev1.PodPending, 300),
+		adapter("codex-sub-x", "codex-sub", "codex", corev1.PodRunning, 200),
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "proxy-llm-proxy-manifestd", Namespace: ns}, Data: map[string]string{"config.yaml": manifest}},
+	}
+}
+
+func TestSeparateModeStatusAndLogin(t *testing.T) {
+	ctx := context.Background()
+	tg := &Target{Client: fake.NewSimpleClientset(separateObjects()...), Namespace: ns, Release: "proxy"}
+	if p, err := tg.Pod(ctx); err != nil || p.Name != "proxy-0" {
+		t.Fatalf("adapter pods must not be mistaken for the proxy pod: %v %v", p, err)
+	}
+	ex := &fakeExec{result: map[string]error{"codex-sub": &ExitError{Code: 1}}}
+	var out, errw bytes.Buffer
+	if err := Status(ctx, tg, ex, &out, &errw); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"claude-sub    claude  logged-in", "codex-sub     codex   not logged-in"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in:\n%s", want, out.String())
+		}
+	}
+	if len(ex.calls) != 2 || ex.calls[0].Pod != "claude-sub-new" || ex.calls[1].Pod != "codex-sub-x" {
+		t.Fatalf("exec must target the adapter pods: %+v", ex.calls)
+	}
+
+	ex = &fakeExec{}
+	if err := Login(ctx, tg, ex, "codex-sub", LoginOptions{TTY: true}); err != nil ||
+		ex.calls[0].Pod != "codex-sub-x" || ex.calls[0].Container != "codex-sub" {
+		t.Fatalf("login: %v %+v", err, ex.calls)
+	}
+	if err := Login(ctx, tg, ex, "nope", LoginOptions{TTY: true}); err == nil || !strings.Contains(err.Error(), "claude-sub, codex-sub") {
+		t.Fatalf("unknown: %v", err)
+	}
+}

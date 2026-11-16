@@ -3,7 +3,7 @@ layout: home
 hero:
   name: LLM Proxy ManifestD
   text: A headless proxy for shared AI accounts
-  tagline: "Per-account concurrency limits and priority queues for parallel AI coding sessions. Built for Kubernetes: deployed with Helm, configured by a hot-reloading ConfigMap, with optional CLI sidecars. No database."
+  tagline: "Per-account concurrency limits and priority queues for parallel AI coding sessions. Built for Kubernetes: deployed with Helm, configured by a hot-reloading ConfigMap, with optional CLI adapters (sidecars or separate pods) and rolling updates. No database."
   actions:
     - theme: brand
       text: Get Started

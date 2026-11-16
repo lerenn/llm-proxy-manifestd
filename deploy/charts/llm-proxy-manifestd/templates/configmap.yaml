@@ -26,6 +26,9 @@ data:
     {{- fail (printf "providers.%s conflicts with a pool of the same name in config.pools" .name) }}
     {{- end }}
     {{- $pool := dict "upstream_url" (printf "http://localhost:%d" (int .port)) "max_concurrency" (int .maxConcurrency) "protocol" .protocol }}
+    {{- if include "llm-proxy-manifestd.separate" $ }}
+    {{- $pool = dict "upstream_url" (printf "http://%s-%s:%d" (include "llm-proxy-manifestd.fullname" $) .name (int .port)) "max_concurrency" (int .maxConcurrency) "protocol" .protocol "api_key" "${ADAPTER_TOKEN}" "auth" "bearer" }}
+    {{- end }}
     {{- $_ := set $pools .name $pool }}
     {{- else }}
     {{- range .apiPools }}
@@ -45,6 +48,13 @@ data:
     {{- end }}
     {{- if $pools }}
     {{- $_ := set $cfg "pools" $pools }}
+    {{- end }}
+    {{- if and (.Values.valkey).enabled (not $cfg.coordination) }}
+    {{- $vk := dict "address" (printf "%s:6379" (include "llm-proxy-manifestd.valkeyName" .)) }}
+    {{- if (.Values.valkey.existingSecret).name }}
+    {{- $_ := set $vk "password_env" "VALKEY_PASSWORD" }}
+    {{- end }}
+    {{- $_ := set $cfg "coordination" (dict "valkey" $vk) }}
     {{- end }}
     {{- if include "llm-proxy-manifestd.clientKeysEnabled" . }}
     {{- $server := deepCopy (get $cfg "server" | default dict) }}

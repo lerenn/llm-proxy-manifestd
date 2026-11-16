@@ -149,3 +149,45 @@ func TestUsage(t *testing.T) {
 		}
 	}
 }
+
+func runToken(t *testing.T, f *fake) (int, string) {
+	t.Helper()
+	srv := httptest.NewServer(f)
+	t.Cleanup(srv.Close)
+	tp := filepath.Join(t.TempDir(), "tok")
+	os.WriteFile(tp, []byte("tok\n"), 0o600)
+	var so, se bytes.Buffer
+	code := run([]string{"init", "-adapter-token-secret", "tk", "-namespace", "ns", "-api", srv.URL,
+		"-token-file", tp, "-ca-file", "/nonexistent"}, &so, &se)
+	return code, so.String() + se.String()
+}
+
+func TestAdapterTokenCreatedOnceNeverOverwritten(t *testing.T) {
+	f := &fake{}
+	code, out := runToken(t, f)
+	if code != 0 || f.sec == nil {
+		t.Fatalf("code=%d %s", code, out)
+	}
+	tok := dec(t, f.sec, "token")
+	if !strings.HasPrefix(tok, "llmp_") || strings.Contains(out, tok) {
+		t.Fatalf("bad token/log: %q %s", tok, out)
+	}
+	w := f.writes
+	if code, out := runToken(t, f); code != 0 || f.writes != w || dec(t, f.sec, "token") != tok {
+		t.Fatalf("token overwritten or rewritten: %s", out)
+	}
+}
+
+func TestAdapterTokenAddedToExistingSecretWithoutKey(t *testing.T) {
+	f := &fake{sec: &secret{Metadata: meta{Name: "tk", ResourceVersion: "3"}, Data: map[string]string{"other": "eA=="}}}
+	if code, out := runToken(t, f); code != 0 || f.sec.Data["token"] == "" || f.sec.Data["other"] != "eA==" {
+		t.Fatalf("code=%d %s %+v", code, out, f.sec)
+	}
+}
+
+func TestAdapterTokenConflictRetry(t *testing.T) {
+	f := &fake{conflicts: 1}
+	if code, out := runToken(t, f); code != 0 || f.writes != 2 {
+		t.Fatalf("code=%d writes=%d %s", code, f.writes, out)
+	}
+}
