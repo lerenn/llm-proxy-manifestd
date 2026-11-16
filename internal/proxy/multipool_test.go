@@ -256,7 +256,7 @@ func TestDashboardShowsPoolsNoSecrets(t *testing.T) {
 	rec := get(t, h, "proxy.test", "/dashboard/api/state")
 	body := rec.Body.String()
 	for _, want := range []string{`"protocol":"openai","name":"m","mode":"least-inflight"`,
-		`{"pool":"a","upstream":"h1.example.com","target_model":"real@medium","priority":0}`, `{"pool":"b","upstream":"h2.example.com:9000"`} {
+		`{"pool":"a","upstream":"h1.example.com","target_model":"real@medium","priority":0,"in_flight":0}`, `{"pool":"b","upstream":"h2.example.com:9000"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %s in %s", want, body)
 		}
