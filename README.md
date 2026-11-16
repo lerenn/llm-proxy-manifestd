@@ -93,6 +93,10 @@ Log in with `kubectl exec -it deploy/<release>-llm-proxy-manifestd -c claude-sub
 
 Define `clients:` in the manifest to require an API key (`x-api-key` or `Authorization: Bearer`) on `/v1/` calls; each client has an optional default `priority` and endpoint-name allow-list. The chart generates one key per client into a Secret (kept across upgrades via `lookup`; use `clientsExistingSecret` with `helm template`/Argo CD). Keys never appear in the ConfigMap. See [Client API keys](website/docs/guide/client-keys.md).
 
+## lpmctl (CLI)
+
+`lpmctl` runs on your machine with your kubeconfig (it is not in any image): `lpmctl keys [client]` prints the client keys (only the key with a name, pipe-friendly), `lpmctl status` shows each provider's login state and the configured clients, `lpmctl login <provider>` opens the interactive CLI login in a subscription sidecar. Binaries for linux/darwin (amd64, arm64) with sha256 checksums are attached to each [GitHub release](https://github.com/lerenn/llm-proxy-manifestd/releases). See the [lpmctl guide](https://llm-proxy-manifestd.lerenn.dev/guide/lpmctl) (flags, RBAC).
+
 ## Dashboard
 
 The binary embeds a lightweight, read-only dashboard (status, version, uptime, slots, queue depth per priority, per-endpoint in-flight/queued/requests/errors, last config reload). It is public and shows only names, upstream host names, counts and timings, never keys, URLs, prompts or headers.

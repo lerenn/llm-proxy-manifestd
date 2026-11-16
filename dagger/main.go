@@ -187,3 +187,46 @@ func (m *LlmProxyManifestd) PublishAdapterImage(
 	}
 	return strings.Join(refs, "\n"), nil
 }
+
+// cliPlatforms are the lpmctl release targets (GOOS/GOARCH).
+var cliPlatforms = []struct{ os, arch string }{
+	{"linux", "amd64"}, {"linux", "arm64"},
+	{"darwin", "amd64"}, {"darwin", "arm64"},
+}
+
+// BuildCli cross-compiles the lpmctl CLI (static, CGO disabled) for
+// linux/darwin x amd64/arm64 and returns a directory with one binary per
+// target, named lpmctl-<os>-<arch>, plus lpmctl-sha256sums.txt. These are
+// the GitHub release assets; lpmctl is not shipped in any image.
+func (m *LlmProxyManifestd) BuildCli(
+	// +defaultPath="/"
+	// +ignore=[".git", "website/node_modules", "website/.vitepress/dist", "website/.vitepress/cache"]
+	source *dagger.Directory,
+	// Version embedded in `lpmctl --version`, e.g. v0.1.0
+	// +default="dev"
+	version string,
+) *dagger.Directory {
+	ctr := dag.Container().
+		From(goImage).
+		WithMountedCache("/go/pkg/mod", dag.CacheVolume("llm-proxy-manifestd-gomod")).
+		WithMountedCache("/root/.cache/go-build", dag.CacheVolume("llm-proxy-manifestd-gobuild")).
+		WithDirectory("/src", source).
+		WithWorkdir("/src").
+		WithEnvVariable("CGO_ENABLED", "0").
+		WithExec([]string{"mkdir", "-p", "/dist"})
+	var names []string
+	for _, p := range cliPlatforms {
+		name := fmt.Sprintf("lpmctl-%s-%s", p.os, p.arch)
+		names = append(names, name)
+		ctr = ctr.
+			WithEnvVariable("GOOS", p.os).
+			WithEnvVariable("GOARCH", p.arch).
+			WithExec([]string{"go", "build", "-trimpath",
+				"-ldflags", "-s -w -X main.version=" + version,
+				"-o", "/dist/" + name, "./cmd/lpmctl"})
+	}
+	ctr = ctr.
+		WithWorkdir("/dist").
+		WithExec([]string{"sh", "-c", "sha256sum " + strings.Join(names, " ") + " > lpmctl-sha256sums.txt"})
+	return ctr.Directory("/dist")
+}
