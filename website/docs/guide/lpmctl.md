@@ -115,3 +115,27 @@ rules:
 | `login` | pods `get`/`list`, pods/exec |
 
 `pods/exec` on this pod gives access to the subscription logins on the PVCs, and `secrets get` to the client keys: grant them only to the people who operate the proxy. You can scope the Secret rule with `resourceNames: [<release>-llm-proxy-manifestd-client-keys]`.
+
+## `lpmctl opencode`
+
+opencode cannot discover the models of a custom provider, so this command generates them from the proxy's live `GET /v1/models` (once in OpenAI format with `Authorization: Bearer`, once in Anthropic format with `x-api-key` + `anthropic-version`) and rewrites the `models` map of two opencode providers.
+
+```sh
+export LPMCTL_PROXY_URL=https://llm-proxy.example.com/v1
+lpmctl opencode --client opencode            # dry run (default): prints added/removed models, changes nothing
+lpmctl opencode --client opencode --write    # apply
+opencode service restart                     # opencode caches its config in a background service
+```
+
+| Flag | Meaning |
+| :- | :- |
+| `--url` | Proxy base URL including `/v1` (default `$LPMCTL_PROXY_URL`; no other default). |
+| `--client` | Client whose key is used; optional when the release has exactly one client. |
+| `--key-env VAR` | Read the key from an environment variable instead of the cluster. |
+| `--config` | Config file (default `$OPENCODE_CONFIG`, else `$XDG_CONFIG_HOME/opencode/opencode.json`, else `~/.config/opencode/opencode.json`). |
+| `--anthropic-provider`, `--openai-provider` | Provider ids (default `anyshiftlab-anthropic-proxy`, `anyshiftlab-openai-proxy`). |
+| `--no-anthropic`, `--no-openai` | Skip one provider. |
+| `--set-key` | Also write the key as the providers' `apiKey` (never printed). |
+| `--write` | Apply. Atomic write, `<config>.bak` saved first if absent, file mode kept (`0600` for a new file). |
+
+Only the `models` map of the two named providers is replaced: models you added by hand to them are removed, models removed from the proxy disappear, the settings of models that stay are kept. Every other key and provider is preserved (formatting is normalised to 2-space JSON). A missing provider block is created (`npm`, `name`, `options.baseURL`). Both the `provider` and the `providers` config styles are detected; a new file uses `provider`. If the file has comments or trailing commas it is not edited: nothing is written and the models are printed for you to paste. A 401/403 from the proxy is reported as a rejected key. Re-run it when the proxy's endpoints change.

@@ -72,7 +72,7 @@ endpoints:
 
 `GET /v1/models` lists the endpoint names of the caller's protocol: Anthropic shape when the request has an `anthropic-version` or `x-api-key` header, OpenAI shape otherwise.
 
-The top-level `routes:` key of earlier versions was removed; a manifest still using it fails with a pointer to the new form. Details: [Protocol endpoints](https://llm-proxy-manifestd.lerenn.dev/guide/protocol-endpoints), [Multi-pool routing](https://llm-proxy-manifestd.lerenn.dev/guide/multi-pool-routing), [Using opencode](https://llm-proxy-manifestd.lerenn.dev/guide/opencode).
+The top-level `routes:` key of earlier versions was removed; a manifest still using it fails with a pointer to the new form. Details: [Protocol endpoints](https://llm-proxy-manifestd.lerenn.dev/guide/protocol-endpoints), [Multi-pool routing](https://llm-proxy-manifestd.lerenn.dev/guide/multi-pool-routing), [Using opencode](https://llm-proxy-manifestd.lerenn.dev/guide/opencode) (`lpmctl opencode --write` generates its model lists from the proxy).
 
 ## Checker
 

@@ -147,7 +147,7 @@ func newRoot() *cobra.Command {
 		},
 	}
 
-	root.AddCommand(keys, status, login)
+	root.AddCommand(keys, status, login, newOpenCodeCmd(g))
 	return root
 }
 
