@@ -54,6 +54,9 @@ dashboard:
 # service account token and runs every container non-root with a read-only
 # root filesystem. Adding or removing a provider restarts the pod.
 #
+# Adapter sidecars have NO readiness probe: the pod is Ready without logins. Until
+# `claude`/`codex login`, endpoints with only that pool return 503; failover
+# endpoints fall through to the next target.
 # Types: claude, codex (experimental) (sidecar + PVC), api / anthropic-api / openai-api (pool only: no
 # container, no PVC; the API key comes from an existing Secret). Only sidecar
 # providers force replicas 1 / Recreate / hardening.

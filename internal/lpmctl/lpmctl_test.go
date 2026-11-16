@@ -24,9 +24,7 @@ func labels(release string) map[string]string {
 func sidecar(name, typ string) corev1.Container {
 	return corev1.Container{
 		Name: name,
-		ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{
-			Command: []string{"/usr/local/bin/adapter-" + typ, "ready"},
-		}}},
+		Env:  []corev1.EnvVar{{Name: "ADAPTER_TYPE", Value: typ}},
 	}
 }
 

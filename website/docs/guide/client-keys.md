@@ -33,7 +33,7 @@ With the chart, set `config.clients` as above. The chart:
 
 - runs a `keys-manager` init container (same image, binary `/keys-manager init`) before the proxy starts. It creates the Secret `<release>-client-keys` if absent and adds one random key (`llmp_` plus 40 random characters) for each client that has none. It never overwrites an existing key, drops the keys of clients removed from `config.clients`, retries on update conflicts and is idempotent. It logs client names only, never keys;
 - creates a ServiceAccount, a Role (`create` on secrets, plus `get`/`update`/`patch` limited by `resourceNames` to that one Secret) and a RoleBinding. The API token is mounted **only** in the init container (projected volume); the proxy and adapter containers have no Kubernetes API token;
-- mounts the Secret read-only into the proxy and the `check-config` init container, and renders `server.client_keys_dir` for you;
+- mounts the Secret read-only (the volume is `optional`, since the Secret does not exist before the init container's first run on a fresh install; until the kubelet projects it, the proxy has no keys and rejects every client) into the proxy and the `check-config` init container, and renders `server.client_keys_dir` for you;
 - does not render the Secret itself: it is not a Helm/Argo CD object, so it is never pruned, diffed or regenerated, and it survives uninstall.
 
 A client added to `config.clients` later gets its key at the **next pod restart** (the init container only runs then): `kubectl rollout restart deploy/<release>-llm-proxy-manifestd`.

@@ -150,7 +150,7 @@ The chart's example pool and endpoints (`defaultPools`/`defaultEndpoints`) are o
 
 Spread an endpoint over several providers by listing several `targets` (see [Multi-pool routing](./multi-pool-routing)). `priority` and `max_concurrency`/`maxConcurrency` may be omitted (priority `0`; concurrency unlimited).
 
-When at least one provider exists the Deployment uses `replicas: 1` and `strategy: Recreate`, `automountServiceAccountToken: false`, non-root users (65532 for the proxy, 10001 for adapters), `readOnlyRootFilesystem`, all capabilities dropped, a `check-config` init container that runs `/checker -f` on the rendered config (from the proxy image), and a per-container readiness probe. With `providers: {}` the chart renders exactly as before.
+When at least one provider exists the Deployment uses `replicas: 1` and `strategy: Recreate`, `automountServiceAccountToken: false`, non-root users (65532 for the proxy, 10001 for adapters), `readOnlyRootFilesystem`, all capabilities dropped, a `check-config` init container that runs `/checker -f` on the rendered config (from the proxy image), and a readiness probe on the proxy container only (adapters never gate readiness). With `providers: {}` the chart renders exactly as before.
 
 ## Login
 
@@ -161,7 +161,9 @@ kubectl exec -it deploy/<release>-llm-proxy-manifestd -c claude-subscription -- 
 # then type /login and follow the prompts
 ```
 
-The login is stored on the PVC and survives restarts. Readiness is decided by the presence of `.credentials.json` in the login directory.
+The login is stored on the PVC and survives restarts. Login state is decided by the presence of `.credentials.json` in the login directory (`adapter-<type> ready`, used by `lpmctl status`).
+
+**Adapters do not gate pod readiness.** The sidecars have no readiness probe: the pod is Ready without any login, so the Service keeps its endpoints and the proxy (API pools, other providers) stays reachable. Until you run `claude login` / `codex login`, an endpoint whose only pool is that subscription answers `503` (`authentication_error`); endpoints with failover targets fall through to the next target.
 
 ## Models and reasoning effort
 
@@ -203,7 +205,7 @@ config:
 
 Codex pools speak the OpenAI protocol, so their endpoints go under `endpoints.openai` (clients call `/v1/chat/completions` on the proxy).
 
-A `codex` provider renders the same pieces as `claude` (loopback sidecar, PVC at `/data/codex` with `CODEX_HOME`, exec readiness probe, pool with `protocol: openai`; ports are shared with Claude sidecars in name order) and follows the same Recreate / hardening rules. The sidecar (`ghcr.io/lerenn/llm-proxy-manifestd-adapter-codex`, command `cmd/codex`) exposes the **OpenAI chat-completions API** (`POST /v1/chat/completions`, streaming SSE and non-stream, plus `GET /ready`; there is no `/v1/models`). The `@low|@medium|@high` suffix is stripped and sent as the turn's `effort`; other suffixes are a 400.
+A `codex` provider renders the same pieces as `claude` (loopback sidecar, PVC at `/data/codex` with `CODEX_HOME`, pool with `protocol: openai`; ports are shared with Claude sidecars in name order) and follows the same Recreate / hardening rules. The sidecar (`ghcr.io/lerenn/llm-proxy-manifestd-adapter-codex`, command `cmd/codex`) exposes the **OpenAI chat-completions API** (`POST /v1/chat/completions`, streaming SSE and non-stream, plus `GET /ready`; there is no `/v1/models`). The `@low|@medium|@high` suffix is stripped and sent as the turn's `effort`; other suffixes are a 400.
 
 **Login** (headless pod): `kubectl exec -it deploy/<release>-llm-proxy-manifestd -c codex-subscription -- codex login --device-auth`, then follow the printed URL and code. The adapter is ready once `$CODEX_HOME/auth.json` exists (the default `file` credential store; the adapter pins `cli_auth_credentials_store="file"`).
 

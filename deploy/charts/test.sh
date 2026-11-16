@@ -70,6 +70,12 @@ providers: {c: {type: claude}}")") && [ "$(grep -c 'kube-api-access' <<<"$out2")
 out3=$(full "$(v o "clientsExistingSecret: mine
 config: {clients: {a: {}}}")")
 ! grep -qE 'keys-manager|kind: Role|kind: ServiceAccount|kube-api-access' <<<"$out3" && grep -q 'secretName: mine' <<<"$out3" && ok existing-secret-no-init || fail existing-secret-no-init
+# volume optional only for the generated Secret
+grep -A4 'secretName: r-llm-proxy-manifestd-client-keys' <<<"$out" | grep -q 'optional: true' && ok keys-volume-optional-generated || fail keys-volume-optional-generated
+! grep -A4 'secretName: mine' <<<"$out3" | grep -q 'optional' && ok keys-volume-required-existing || fail keys-volume-required-existing
+# adapters never gate readiness; proxy keeps its probe
+out5=$(full "$(v q "providers: {c: {type: claude}}")")
+[ "$(grep -c '^          readinessProbe:' <<<"$out5")" -eq 1 ] && grep -q 'ADAPTER_TYPE' <<<"$out5" && ok adapters-no-readiness || fail adapters-no-readiness
 # no clients: nothing
 out4=$(full "$(v p "{}")")
 ! grep -qE 'keys-manager|kind: Role|client-keys' <<<"$out4" && ok no-clients-no-init || fail no-clients-no-init
