@@ -89,6 +89,17 @@ routes:
 
 The image also contains `/checker`, which validates a manifest with the proxy's own loader: `docker run --rm -v $PWD/config.yaml:/config.yaml --entrypoint /checker <image> -f /config.yaml`. Exit 0 if valid, 1 with a readable error otherwise. Unset `${VAR}`s expand to empty and do not fail validation; secrets are never printed. See [Protocol endpoints](https://llm-proxy-manifestd.lerenn.dev/guide/protocol-endpoints).
 
+## Subscription accounts (CLI adapters)
+
+To use a Claude subscription login, define `accounts:` in the Helm values. Each account becomes a loopback-only adapter sidecar (one per account, its own pool), a PVC for the login and a matching pool, and the pod switches to `replicas: 1` / `Recreate`.
+
+```yaml
+accounts:
+  claude-subscription: {type: claude, maxConcurrency: 4}
+```
+
+Log in with `kubectl exec -it deploy/<release>-llm-proxy-manifestd -c claude-subscription -- claude` then `/login`. Rollouts cause a brief outage; adding an account restarts the pod, config edits hot-reload. The adapter has not been run against a real subscription yet, and using a subscription this way may be restricted by the vendor's terms: it is for a single user with their own account, and you must check those terms yourself. See the [guide](website/docs/guide/subscription-accounts.md).
+
 ## Dashboard
 
 The binary embeds a lightweight, read-only dashboard (status, version, uptime, slots, queue depth per priority, per-route in-flight/queued/requests/errors, last config reload). It is public and shows only names, upstream host names, counts and timings, never keys, URLs, prompts or headers.

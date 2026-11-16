@@ -2,6 +2,7 @@
   Intentionally no checksum/config annotation: the ConfigMap is mounted as a
   directory (no subPath) and the proxy hot-reloads it without a pod restart.
 */ -}}
+{{- $accounts := include "llm-proxy-manifestd.accounts" . | fromJsonArray -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -9,12 +10,20 @@ metadata:
   labels:
     {{- include "llm-proxy-manifestd.labels" . | nindent 4 }}
 spec:
+  {{- if $accounts }}
+  # Accounts hold a login on a ReadWriteOnce volume: exactly one pod, and the
+  # old pod must be gone before the new one starts (brief outage on rollout).
+  replicas: 1
+  strategy:
+    type: Recreate
+  {{- else }}
   replicas: {{ .Values.replicaCount }}
   strategy:
     type: RollingUpdate
     rollingUpdate:
       maxUnavailable: 0
       maxSurge: 1
+  {{- end }}
   selector:
     matchLabels:
       {{- include "llm-proxy-manifestd.selectorLabels" . | nindent 6 }}
@@ -23,6 +32,14 @@ spec:
       labels:
         {{- include "llm-proxy-manifestd.selectorLabels" . | nindent 8 }}
     spec:
+      {{- if $accounts }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      {{- end }}
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       containers:
         - name: llm-proxy-manifestd
@@ -58,11 +75,66 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- if $accounts }}
+          securityContext:
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          {{- end }}
           volumeMounts:
             - name: config
               mountPath: /etc/llm-proxy-manifestd
               readOnly: true
+        {{- range $accounts }}
+        {{- $a := .account }}
+        {{- $img := $.Values.adapters.claude.image }}
+        # Account {{ .name }}: loopback-only adapter; its pool in the ConfigMap
+        # points at http://localhost:{{ .port }}.
+        - name: {{ .name }}
+          image: "{{ $img.repository }}:{{ $img.tag | default $.Chart.AppVersion }}"
+          imagePullPolicy: {{ $img.pullPolicy }}
+          env:
+            - name: ADAPTER_LISTEN
+              value: "127.0.0.1:{{ .port }}"
+            - name: CLAUDE_CONFIG_DIR
+              value: /data/claude
+            {{- with $a.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          readinessProbe:
+            # exec, not httpGet: the adapter listens on loopback only.
+            exec:
+              command: ["/usr/local/bin/adapter-claude", "ready"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+          securityContext:
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          {{- with ($a.resources | default $.Values.adapters.claude.resources) }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: login-{{ .name }}
+              mountPath: /data/claude
+            - name: tmp
+              mountPath: /tmp
+        {{- end }}
       volumes:
         - name: config
           configMap:
             name: {{ include "llm-proxy-manifestd.fullname" . }}
+        {{- if $accounts }}
+        - name: tmp
+          emptyDir: {}
+        {{- end }}
+        {{- range $accounts }}
+        - name: login-{{ .name }}
+          persistentVolumeClaim:
+            claimName: {{ include "llm-proxy-manifestd.fullname" $ }}-{{ .name }}
+        {{- end }}

@@ -43,7 +43,44 @@ dashboard:
     annotations: {}
     tls: []
 
-# Rendered verbatim as config.yaml. Changing it hot-reloads the running pods.
+# CLI adapter sidecars, one per subscription account (see the "Subscription
+# accounts" guide). Each entry renders, in the same pod: one sidecar container
+# listening on 127.0.0.1:<port>, one PVC holding its login at /data/claude, and
+# a pool of the same name (upstream_url http://localhost:<port>) merged into
+# config.pools. Reference the pool from routes as usual. Empty = feature off.
+#
+# Setting any account forces replicas: 1 and strategy Recreate, disables the
+# service account token and runs every container non-root with a read-only
+# root filesystem. Adding or removing an account restarts the pod.
+#
+# accounts:
+#   claude-subscription:
+#     type: claude            # only "claude" is supported
+#     maxConcurrency: 4       # pool max_concurrency (default 4)
+#     # port: 9100            # default: accountsBasePort + index in name order
+#     # storage: {size: 1Gi, storageClass: ""}   # overrides accountStorage
+#     # resources: {}         # overrides adapters.claude.resources
+#     # env: []               # extra container env entries
+accounts: {}
+
+# First loopback port assigned to accounts (sorted by name, +1 each).
+accountsBasePort: 9100
+
+# Defaults for each account's login volume (ReadWriteOnce).
+accountStorage:
+  size: 1Gi
+  storageClass: ""
+
+adapters:
+  claude:
+    image:
+      repository: ghcr.io/lerenn/llm-proxy-manifestd-adapter-claude
+      # Defaults to the chart appVersion (adapter and proxy are released together).
+      tag: ""
+      pullPolicy: IfNotPresent
+    resources: {}
+
+# Rendered as config.yaml (account pools are merged into `pools`). Changing it hot-reloads the running pods.
 config:
   server:
     listen: ":8080"
