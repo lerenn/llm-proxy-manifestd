@@ -54,7 +54,7 @@ dashboard:
 # service account token and runs every container non-root with a read-only
 # root filesystem. Adding or removing a provider restarts the pod.
 #
-# Types: claude, codex (experimental) (sidecar + PVC), anthropic-api and openai-api (pool only: no
+# Types: claude, codex (experimental) (sidecar + PVC), api / anthropic-api / openai-api (pool only: no
 # container, no PVC; the API key comes from an existing Secret). Only sidecar
 # providers force replicas 1 / Recreate / hardening.
 #   my-anthropic:
@@ -63,9 +63,23 @@ dashboard:
 #     maxConcurrency: 4       # 0 or omitted = unlimited (no limit, no queue)
 #     apiKey: {existingSecret: {name: my-secret, key: anthropic-key}}   # required
 #     # openai-api works the same (default url https://api.openai.com)
+#   # Generic API: one upstream that may speak one or both protocols.
+#   #   format: anthropic | openai | [anthropic, openai]   (required; string or list, no duplicates)
+#   #   url: required (no trailing /v1)
+#   #   auth: bearer | x-api-key   (optional; default x-api-key for anthropic pools, bearer for openai)
+#   # One format -> one pool named <name>. Several formats -> pools <name>-anthropic and
+#   # <name>-openai in the concurrency group <name>: they share ONE slot limit and ONE queue
+#   # (maxConcurrency: 1 = one request at a time across both protocols).
+#   nevermetered:
+#     type: api
+#     format: [anthropic, openai]
+#     url: https://api.nevermetered.com
+#     maxConcurrency: 1
+#     auth: bearer
+#     apiKey: {existingSecret: {name: my-secret, key: nevermetered}}
 # providers:
 #   claude-subscription:
-#     type: claude            # claude | codex | anthropic-api | openai-api
+#     type: claude            # claude | codex | api | anthropic-api | openai-api
 #     maxConcurrency: 4       # pool max_concurrency; 0 or omitted = unlimited
 #     # port: 9100            # default: providersBasePort + index in name order
 #     # storage: {size: 1Gi, storageClass: ""}   # overrides providerStorage

@@ -4,7 +4,7 @@
 
 A Kubernetes-native LLM reverse proxy, deployed with a Helm chart and configured through a ConfigMap that hot-reloads. It adds priority queuing, per-pool concurrency limits and SSE streaming in front of OpenAI-compatible endpoints, with a read-only status dashboard embedded in the binary and no database. Optional CLI sidecars (Claude, Codex; experimental) can run alongside it in the same pod.
 
-> **Kubernetes-first.** The supported way to run this project is the Helm chart: the manifest is a ConfigMap that hot-reloads, and the proxy runs as a regular pod next to your upstream bridges. Optional CLI sidecars for Claude and Codex subscription logins run in the same pod and are enabled through the chart's `providers:` value (see [Subscription providers](https://llm-proxy-manifestd.lerenn.dev/guide/subscription-providers)); both adapters are experimental and have never run against a real login. Sidecar-less API providers (`anthropic-api`, `openai-api`) also exist. The binary itself is a static Go program that reads a config file, so it can also run under Docker or on a laptop, but that is not the primary target.
+> **Kubernetes-first.** The supported way to run this project is the Helm chart: the manifest is a ConfigMap that hot-reloads, and the proxy runs as a regular pod next to your upstream bridges. Optional CLI sidecars for Claude and Codex subscription logins run in the same pod and are enabled through the chart's `providers:` value (see [Subscription providers](https://llm-proxy-manifestd.lerenn.dev/guide/subscription-providers)); both adapters are experimental and have never run against a real login. Sidecar-less API providers (`anthropic-api`, `openai-api`, and the generic `api` type for upstreams speaking one or both protocols with a shared concurrency limit via `concurrency_group`) also exist. The binary itself is a static Go program that reads a config file, so it can also run under Docker or on a laptop, but that is not the primary target.
 
 Everything is declared in a single YAML manifest delivered through Helm. There is nothing to click, nothing to migrate, and no state to back up: change your values, run `helm upgrade`, and the running proxy reloads the new manifest without dropping a single in-flight stream.
 
@@ -49,7 +49,7 @@ Clients then talk OpenAI-compatible HTTP to the service and use an endpoint name
 
 ## Concurrency limit (default: unlimited)
 
-`max_concurrency` limits parallel requests per pool. **Omitting it, or setting `0`, means unlimited** (no queue, requests go straight through); this is a change from earlier releases, where it was required and had to be >= 1. Negative values are invalid. The same applies to `maxConcurrency` on chart `providers`. Set a positive number wherever you rely on a limit.
+`max_concurrency` limits parallel requests per pool. **Omitting it, or setting `0`, means unlimited** (no queue, requests go straight through); this is a change from earlier releases, where it was required and had to be >= 1. Negative values are invalid. The same applies to `maxConcurrency` on chart `providers`. Set a positive number wherever you rely on a limit. Pools can share one limit and queue across protocols with `concurrency_group: <name>` (members must declare the same `max_concurrency`), and `auth: bearer|x-api-key` overrides the upstream auth header; see the [providers guide](https://llm-proxy-manifestd.lerenn.dev/guide/subscription-providers).
 
 ## Endpoints, protocols and multi-pool routing
 

@@ -29,7 +29,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 
 {{/*
 Providers: entries of .Values.providers. Types claude / codex = CLI adapter sidecar (+PVC);
-types anthropic-api / openai-api = pool only (no container).
+types api / anthropic-api / openai-api = pool(s) only (no container).
 Returns a JSON list [{name, type, port, maxConcurrency, ...}] sorted by name.
 Ports are deterministic: providersBasePort + index among sidecar providers in name order, unless the
 provider sets `port` explicitly.
@@ -62,10 +62,52 @@ provider sets `port` explicitly.
 {{- $_ := set $entry "dataDir" (printf "/data/%s" $type) -}}
 {{- $_ := set $entry "port" (int ($a.port | default (add $base $sidecars))) -}}
 {{- $sidecars = add1 $sidecars -}}
-{{- else if or (eq $type "anthropic-api") (eq $type "openai-api") -}}
+{{- else if or (eq $type "anthropic-api") (eq $type "openai-api") (eq $type "api") -}}
 {{- $_ := set $entry "sidecar" false -}}
-{{- $_ := set $entry "protocol" (ternary "anthropic" "openai" (eq $type "anthropic-api")) -}}
-{{- $url := $a.url | default (ternary "https://api.anthropic.com" "https://api.openai.com" (eq $type "anthropic-api")) -}}
+{{- $formats := list -}}
+{{- $url := "" -}}
+{{- if eq $type "api" -}}
+{{- $fmt := $a.format | default "" -}}
+{{- if kindIs "string" $fmt -}}
+{{- $formats = ternary (list) (list $fmt) (eq $fmt "") -}}
+{{- else if kindIs "slice" $fmt -}}
+{{- $formats = $fmt -}}
+{{- else -}}
+{{- fail (printf "providers.%s: format must be a string or a list (anthropic, openai)" $name) -}}
+{{- end -}}
+{{- if not $formats -}}
+{{- fail (printf "providers.%s: type api requires `format`: anthropic, openai or [anthropic, openai]" $name) -}}
+{{- end -}}
+{{- range $f := $formats -}}
+{{- if not (has $f (list "anthropic" "openai")) -}}
+{{- fail (printf "providers.%s: invalid format %v (allowed: anthropic, openai)" $name $f) -}}
+{{- end -}}
+{{- end -}}
+{{- if ne (len $formats) (len (uniq $formats)) -}}
+{{- fail (printf "providers.%s: duplicate entries in format" $name) -}}
+{{- end -}}
+{{- if not $a.url -}}
+{{- fail (printf "providers.%s: type api requires `url` (e.g. https://api.example.com; no trailing /v1)" $name) -}}
+{{- end -}}
+{{- $url = $a.url -}}
+{{- else -}}
+{{- if $a.format -}}
+{{- fail (printf "providers.%s: `format` is only valid for type api" $name) -}}
+{{- end -}}
+{{- $formats = list (ternary "anthropic" "openai" (eq $type "anthropic-api")) -}}
+{{- $url = $a.url | default (ternary "https://api.anthropic.com" "https://api.openai.com" (eq $type "anthropic-api")) -}}
+{{- end -}}
+{{- if and $a.auth (not (has $a.auth (list "bearer" "x-api-key"))) -}}
+{{- fail (printf "providers.%s: invalid auth %v (allowed: bearer, x-api-key)" $name $a.auth) -}}
+{{- end -}}
+{{- $apiPools := list -}}
+{{- range $f := $formats -}}
+{{- $pn := ternary (printf "%s-%s" $name $f) $name (gt (len $formats) 1) -}}
+{{- $apiPools = append $apiPools (dict "name" $pn "protocol" $f) -}}
+{{- end -}}
+{{- $_ := set $entry "apiPools" $apiPools -}}
+{{- $_ := set $entry "group" (ternary $name "" (gt (len $formats) 1)) -}}
+{{- $_ := set $entry "auth" ($a.auth | default "") -}}
 {{- $_ := set $entry "url" $url -}}
 {{- $sec := dig "apiKey" "existingSecret" dict $a -}}
 {{- if not (and $sec.name $sec.key) -}}
@@ -75,7 +117,7 @@ provider sets `port` explicitly.
 {{- $_ := set $entry "secretKey" $sec.key -}}
 {{- $_ := set $entry "envName" (printf "PROVIDER_%s_API_KEY" (upper (replace "-" "_" $name))) -}}
 {{- else -}}
-{{- fail (printf "providers.%s: unsupported type %q (valid types: claude, codex, anthropic-api, openai-api)" $name $type) -}}
+{{- fail (printf "providers.%s: unsupported type %q (valid types: claude, codex, api, anthropic-api, openai-api)" $name $type) -}}
 {{- end -}}
 {{- $out = append $out $entry -}}
 {{- end -}}

@@ -87,6 +87,7 @@ type dashboardQueue struct {
 type dashboardPool struct {
 	Name           string           `json:"name"`
 	Protocol       string           `json:"protocol"`
+	Group          string           `json:"concurrency_group,omitempty"` // slots/queue are the group's
 	Upstream       string           `json:"upstream"`
 	MaxConcurrency int              `json:"max_concurrency"` // 0 when unlimited
 	Unlimited      bool             `json:"unlimited"`
@@ -163,9 +164,11 @@ func (h *Handler) dashboardSnapshot() (dashboardState, bool) {
 		names = append(names, n)
 	}
 	sort.Strings(names)
+	counted := map[string]bool{} // concurrency groups already added to totals
 	for _, n := range names {
 		p := st.Pools[n]
 		s := p.Stats()
+		group := st.Config.Pools[n].ConcurrencyGroup
 		host := ""
 		if pc, ok := st.Config.Pools[n]; ok && pc.Parsed != nil {
 			host = pc.Parsed.Host // host[:port] only: no userinfo, path or query
@@ -177,9 +180,15 @@ func (h *Handler) dashboardSnapshot() (dashboardState, bool) {
 		}
 		sort.Slice(prios, func(i, j int) bool { return prios[i].Priority > prios[j].Priority })
 		out.Pools = append(out.Pools, dashboardPool{
-			Name: n, Protocol: st.Config.Pools[n].Protocol, Upstream: host, MaxConcurrency: s.MaxConcurrency, Unlimited: s.Unlimited, Active: s.Active,
+			Name: n, Protocol: st.Config.Pools[n].Protocol, Group: group, Upstream: host, MaxConcurrency: s.MaxConcurrency, Unlimited: s.Unlimited, Active: s.Active,
 			Queued: s.QueueDepth, QueueByPrio: prios, TotalServed: s.TotalServed,
 		})
+		if group != "" {
+			if counted[group] {
+				continue
+			}
+			counted[group] = true
+		}
 		if s.Unlimited {
 			out.Totals.Unlimited = true
 		} else {

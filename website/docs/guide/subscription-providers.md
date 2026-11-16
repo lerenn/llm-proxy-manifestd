@@ -27,6 +27,7 @@ This is meant for a single user running their own subscription. Vendor terms for
 | `claude` | sidecar container + PVC + pool | `anthropic` | Claude subscription login via the `claude` CLI |
 | `anthropic-api` | pool only | `anthropic` | Anthropic API key from a Secret |
 | `openai-api` | pool only | `openai` | OpenAI or any OpenAI-compatible gateway, key from a Secret |
+| `api` | pool(s) only | `format`: `anthropic`, `openai` or both | Generic upstream API; one or both protocols, optionally one shared concurrency limit |
 | `codex` | sidecar container + PVC + pool (**experimental**) | `openai` | Codex (ChatGPT) subscription login via `codex app-server` |
 
 Unknown types fail the render. The old `accounts` key (and `accountsBasePort`, `accountStorage`) fails the render with a pointer to `providers`.
@@ -53,9 +54,42 @@ kubectl create secret generic provider-keys \
 
 The key is never put in values: the chart injects it into the proxy container as `PROVIDER_<NAME>_API_KEY` (name upper-cased, `-` becomes `_`) with `secretKeyRef` (`optional: false`, so a missing Secret blocks the pod) and renders `api_key: ${PROVIDER_<NAME>_API_KEY}` in the pool.
 
-**What the URL should be.** The proxy appends the client's request path (which already starts with `/v1/...`) to the path of `upstream_url`. So use the bare origin: `https://api.anthropic.com`, `https://api.openai.com`. Do **not** add `/v1` (it would become `/v1/v1/...`). For a gateway that lives under a path prefix, give that prefix only, e.g. `https://gw.example.com/openai`. Anthropic pools get `x-api-key`, OpenAI pools `Authorization: Bearer`.
+**What the URL should be.** The proxy appends the client's request path (which already starts with `/v1/...`) to the path of `upstream_url`. So use the bare origin: `https://api.anthropic.com`, `https://api.openai.com`. Do **not** add `/v1` (it would become `/v1/v1/...`). For a gateway that lives under a path prefix, give that prefix only, e.g. `https://gw.example.com/openai`. Anthropic pools get `x-api-key`, OpenAI pools `Authorization: Bearer` (override with `auth`, see the `api` type below).
 
 A pod with only API-key providers keeps the normal rolling update and `replicaCount`; the Recreate/replicas 1/hardening/PVC behaviour below applies as soon as one `claude` provider exists. The `check-config` init container runs whenever any provider exists.
+
+### Generic `api` provider: one upstream, one or both protocols
+
+`anthropic-api` and `openai-api` stay as aliases with default URLs. Use `type: api` for any other upstream, in particular one that speaks both protocols:
+
+```yaml
+providers:
+  nevermetered:
+    type: api
+    format: [anthropic, openai]       # anthropic | openai | a list of both; required, no duplicates
+    url: https://api.nevermetered.com # required
+    maxConcurrency: 1                 # ONE request at a time across both protocols
+    auth: bearer                      # optional: bearer | x-api-key
+    apiKey: {existingSecret: {name: llm-proxy-providers, key: nevermetered}}
+```
+
+- One format renders one pool named `<name>`. Several formats render one pool per format, `<name>-anthropic` and `<name>-openai`, all in the **concurrency group** `<name>`.
+- `auth` selects the upstream header: `bearer` sends `Authorization: Bearer <key>`, `x-api-key` sends `x-api-key`; the other one is stripped and the client's credentials are never forwarded. Unset keeps the defaults (`x-api-key` for Anthropic pools, `bearer` for OpenAI pools).
+- Invalid combinations (missing `format`/`url`/`apiKey`, unknown or duplicate format, unknown `auth`) fail the render with a message.
+
+Reference the generated pools from endpoints as usual, e.g. `{pool: nevermetered-anthropic, target_model: ...}` under `endpoints.anthropic` and `{pool: nevermetered-openai, ...}` under `endpoints.openai`.
+
+#### Concurrency groups (proxy config)
+
+Without the chart, set `concurrency_group` on pools:
+
+```yaml
+pools:
+  nm-anthropic: {upstream_url: https://api.nevermetered.com, protocol: anthropic, auth: bearer, api_key: "${NM_KEY}", max_concurrency: 1, concurrency_group: nm}
+  nm-openai:    {upstream_url: https://api.nevermetered.com, protocol: openai,    auth: bearer, api_key: "${NM_KEY}", max_concurrency: 1, concurrency_group: nm}
+```
+
+Pools in the same group share ONE slot limit and ONE wait queue, across protocols: priority and aging apply to all waiters of the group together. All members must declare the same `max_concurrency` (otherwise the config is rejected; `0` = unlimited is allowed). Hot reload keeps working: changing the limit resizes the live group without dropping held slots or queued requests, and adding or removing members keeps the group. In `/status` and the dashboard each member shows `concurrency_group`; its active/queued/limit numbers are the group's, and the dashboard totals count the group once. `/checker` validates the group and `auth` fields.
 
 ### Subscription with an API fallback
 

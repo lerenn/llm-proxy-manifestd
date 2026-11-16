@@ -51,8 +51,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	for _, w := range cfg.Warnings() {
 		fmt.Fprintf(stderr, "warning: %s\n", w)
 	}
-	fmt.Fprintf(stdout, "config ok: %d pools, %d anthropic endpoints, %d openai endpoints\n",
-		len(cfg.Pools), len(cfg.Endpoints[config.ProtocolAnthropic]), len(cfg.Endpoints[config.ProtocolOpenAI]))
+	fmt.Fprintf(stdout, "config ok: %d pools%s, %d anthropic endpoints, %d openai endpoints\n",
+		len(cfg.Pools), groupNote(cfg), len(cfg.Endpoints[config.ProtocolAnthropic]), len(cfg.Endpoints[config.ProtocolOpenAI]))
 	return 0
 }
 
@@ -78,4 +78,21 @@ func warnMissingKeys(cfg *config.Config, w io.Writer) {
 			fmt.Fprintf(w, "warning: client %q has no key in %s; it will be rejected\n", n, dir)
 		}
 	}
+}
+
+func groupNote(cfg *config.Config) string {
+	if n := countGroups(cfg); n > 0 {
+		return fmt.Sprintf(" (%d concurrency groups)", n)
+	}
+	return ""
+}
+
+func countGroups(cfg *config.Config) int {
+	g := map[string]bool{}
+	for _, p := range cfg.Pools {
+		if p.ConcurrencyGroup != "" {
+			g[p.ConcurrencyGroup] = true
+		}
+	}
+	return len(g)
 }
