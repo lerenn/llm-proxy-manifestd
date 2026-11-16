@@ -24,6 +24,7 @@ export default defineConfig({
           { text: 'Helm Values', link: '/guide/helm-values' },
           { text: 'Architecture', link: '/guide/architecture' },
           { text: 'Priority Queues', link: '/guide/priority-queues' },
+          { text: 'Releasing', link: '/guide/releasing' },
         ],
       },
     ],
