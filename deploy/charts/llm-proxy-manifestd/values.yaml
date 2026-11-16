@@ -1,0 +1,47 @@
+image:
+  repository: ghcr.io/lerenn/llm-proxy-manifestd
+  # Defaults to the chart appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Name of an existing Secret whose keys are exposed as environment variables,
+# so ${VAR} references in `config` are resolved at load time.
+existingSecret: ""
+
+replicaCount: 1
+
+# Pods get this long to finish in-flight streams on shutdown.
+terminationGracePeriodSeconds: 600
+
+resources: {}
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: llm-proxy.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Rendered verbatim as config.yaml. Changing it hot-reloads the running pods.
+config:
+  server:
+    listen: ":8080"
+    queue_timeout: "120s"
+    aging_interval: "5s"
+  pools:
+    codex-sub:
+      upstream_url: http://cliproxyapi.default.svc.cluster.local:8317
+      api_key: "${LOCAL_BRIDGE_KEY}"
+      max_concurrency: 2
+  routes:
+    codex-interactive: {pool: codex-sub, target_model: gpt-5.4, priority: 100}
+    codex-default: {pool: codex-sub, target_model: gpt-5.4, priority: 50}
+    codex-background: {pool: codex-sub, target_model: gpt-5.4, priority: 10}

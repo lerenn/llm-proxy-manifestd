@@ -1,0 +1,8 @@
+{
+  "name": "llm-proxy-manifestd",
+  "engineVersion": "v0.19.8",
+  "sdk": {
+    "source": "go"
+  },
+  "source": "dagger"
+}

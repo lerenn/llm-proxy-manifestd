@@ -1,0 +1,117 @@
+// Dagger CI/CD module for llm-proxy-manifestd.
+package main
+
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"strings"
+
+	"dagger/llm-proxy-manifestd/internal/dagger"
+)
+
+const (
+	registry   = "ghcr.io"
+	imageRepo  = "ghcr.io/lerenn/llm-proxy-manifestd"
+	chartRepo  = "oci://ghcr.io/lerenn/charts"
+	chartPath  = "deploy/charts/llm-proxy-manifestd"
+	goImage    = "golang:1.23"
+	helmImage  = "alpine/helm:3.16.4"
+	releaseTag = `^v?[0-9]+\.[0-9]+\.[0-9]+$`
+)
+
+// LlmProxyManifestd is the module entrypoint.
+type LlmProxyManifestd struct{}
+
+// Test runs the Go test suite with the race detector.
+func (m *LlmProxyManifestd) Test(
+	ctx context.Context,
+	// +defaultPath="/"
+	// +ignore=[".git", "website/node_modules", "website/.vitepress/dist", "website/.vitepress/cache"]
+	source *dagger.Directory,
+) (string, error) {
+	return dag.Container().
+		From(goImage).
+		WithMountedCache("/go/pkg/mod", dag.CacheVolume("llm-proxy-manifestd-gomod")).
+		WithMountedCache("/root/.cache/go-build", dag.CacheVolume("llm-proxy-manifestd-gobuild")).
+		WithDirectory("/src", source).
+		WithWorkdir("/src").
+		WithExec([]string{"go", "test", "-race", "./..."}).
+		Stdout(ctx)
+}
+
+// PublishImage builds a multi-arch (linux/amd64, linux/arm64) image and pushes
+// it to ghcr.io/lerenn/llm-proxy-manifestd:<tag>. Release tags (vX.Y.Z) are
+// also published as the bare version and as :latest.
+func (m *LlmProxyManifestd) PublishImage(
+	ctx context.Context,
+	// +defaultPath="/"
+	// +ignore=[".git", "website/node_modules", "website/.vitepress/dist", "website/.vitepress/cache"]
+	source *dagger.Directory,
+	// Image tag, e.g. v0.1.0
+	tag string,
+	// Registry username
+	registryUser string,
+	// Registry token or password
+	registryToken *dagger.Secret,
+) (string, error) {
+	version := strings.TrimPrefix(tag, "v")
+	var variants []*dagger.Container
+	for _, platform := range []dagger.Platform{"linux/amd64", "linux/arm64"} {
+		variants = append(variants, source.DockerBuild(dagger.DirectoryDockerBuildOpts{
+			Platform:  platform,
+			BuildArgs: []dagger.BuildArg{{Name: "VERSION", Value: version}},
+		}))
+	}
+
+	tags := []string{tag}
+	if regexp.MustCompile(releaseTag).MatchString(tag) {
+		if version != tag {
+			tags = append(tags, version)
+		}
+		tags = append(tags, "latest")
+	}
+
+	publisher := dag.Container().WithRegistryAuth(registry, registryUser, registryToken)
+	var refs []string
+	for _, t := range tags {
+		ref, err := publisher.Publish(ctx, fmt.Sprintf("%s:%s", imageRepo, t),
+			dagger.ContainerPublishOpts{PlatformVariants: variants})
+		if err != nil {
+			return "", fmt.Errorf("publish %s: %w", t, err)
+		}
+		refs = append(refs, ref)
+	}
+	return strings.Join(refs, "\n"), nil
+}
+
+// PublishChart packages the Helm chart and pushes it to
+// oci://ghcr.io/lerenn/charts.
+func (m *LlmProxyManifestd) PublishChart(
+	ctx context.Context,
+	// +defaultPath="/"
+	// +ignore=[".git", "website/node_modules", "website/.vitepress/dist", "website/.vitepress/cache"]
+	source *dagger.Directory,
+	// Chart version, e.g. v0.1.0 (a leading "v" is stripped; also used as appVersion)
+	version string,
+	// Registry username
+	registryUser string,
+	// Registry token or password
+	registryToken *dagger.Secret,
+) (string, error) {
+	v := strings.TrimPrefix(version, "v")
+	return dag.Container().
+		From(helmImage).
+		WithDirectory("/chart", source.Directory(chartPath)).
+		WithSecretVariable("REGISTRY_TOKEN", registryToken).
+		WithEnvVariable("REGISTRY_USER", registryUser).
+		WithEnvVariable("CHART_VERSION", v).
+		WithEnvVariable("CHART_REPO", chartRepo).
+		WithExec([]string{"sh", "-c", strings.Join([]string{
+			"set -e",
+			`helm package /chart --version "$CHART_VERSION" --app-version "$CHART_VERSION" -d /out`,
+			`echo "$REGISTRY_TOKEN" | helm registry login ` + registry + ` -u "$REGISTRY_USER" --password-stdin`,
+			`helm push /out/llm-proxy-manifestd-"$CHART_VERSION".tgz "$CHART_REPO"`,
+		}, "\n")}).
+		Stdout(ctx)
+}
