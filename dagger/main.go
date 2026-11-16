@@ -223,7 +223,7 @@ func (m *LlmProxyManifestd) BuildCli(
 			WithEnvVariable("GOARCH", p.arch).
 			WithExec([]string{"go", "build", "-trimpath",
 				"-ldflags", "-s -w -X main.version=" + version,
-				"-o", "/dist/" + name, "./cmd/lpmctl"})
+				"-o", "/dist/" + name, "./cmd/cli"})
 	}
 	ctr = ctr.
 		WithWorkdir("/dist").

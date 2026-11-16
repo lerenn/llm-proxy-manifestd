@@ -14,7 +14,7 @@ sha256sum --ignore-missing -c lpmctl-sha256sums.txt   # macOS: shasum -a 256 --i
 install -m 0755 "lpmctl-$os-$arch" ~/.local/bin/lpmctl
 ```
 
-Or build it from a checkout: `go build -o lpmctl ./cmd/lpmctl`.
+Or build it from a checkout: `go build -o lpmctl ./cmd/cli` (`go install github.com/lerenn/llm-proxy-manifestd/cmd/cli@latest` also works, but names the binary `cli`: rename it to `lpmctl`).
 
 ## Selecting the release
 
