@@ -11,12 +11,13 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Run tests (go test -race)
         uses: dagger/dagger-for-github@v7
         with:
-          version: "0.19.8"
+          version: "0.21.11"
           verb: call
           args: test
 

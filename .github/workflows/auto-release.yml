@@ -80,18 +80,20 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Run tests (go test -race)
         uses: dagger/dagger-for-github@v7
         with:
-          version: "0.19.8"
+          version: "0.21.11"
           verb: call
           args: test
 
   publish:
     needs: [version, test]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: write
@@ -100,7 +102,7 @@ jobs:
       - name: Publish image
         uses: dagger/dagger-for-github@v7
         with:
-          version: "0.19.8"
+          version: "0.21.11"
           verb: call
           args: publish-image --tag=${{ needs.version.outputs.version }} --registry-user=lerenn --registry-token=env:GITHUB_TOKEN
         env:
@@ -108,7 +110,7 @@ jobs:
       - name: Publish chart
         uses: dagger/dagger-for-github@v7
         with:
-          version: "0.19.8"
+          version: "0.21.11"
           verb: call
           args: publish-chart --version=${{ needs.version.outputs.version }} --registry-user=lerenn --registry-token=env:GITHUB_TOKEN
         env:
