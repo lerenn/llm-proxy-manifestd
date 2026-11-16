@@ -172,3 +172,20 @@ func TestDashboardUnlimitedPool(t *testing.T) {
 		}
 	}
 }
+
+func TestDashboardSidebarViews(t *testing.T) {
+	st := dashState(t, "{}")
+	h := New(func() *config.RuntimeState { return st }, quiet())
+	for _, host := range []struct{ host, path string }{{"dashboard.x.test", "/"}, {"proxy.test", "/dashboard/"}} {
+		body := get(t, h, host.host, host.path).Body.String()
+		for _, want := range []string{`href="#/overview"`, `href="#/pools"`, `href="#/endpoints"`, `id="view-overview"`, `id="view-pools"`, `id="view-endpoints"`} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%v: missing %s", host, want)
+			}
+		}
+	}
+	js := get(t, h, "dashboard.x.test", "/app.js").Body.String()
+	if !strings.Contains(js, "hashchange") || !strings.Contains(js, "'api/state'") {
+		t.Error("app.js must route on hash and use the relative API URL")
+	}
+}
