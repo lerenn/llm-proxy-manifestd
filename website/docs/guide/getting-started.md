@@ -1,6 +1,6 @@
 # Getting Started
 
-`llm-proxy-manifestd` sits in front of an OpenAI-compatible endpoint (for example
+**LLM Proxy ManifestD** sits in front of an OpenAI-compatible endpoint (for example
 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) or an upstream API) and makes sure that
 a shared account never receives more parallel requests than you allow. Excess requests wait in a
 priority queue.

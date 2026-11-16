@@ -1,7 +1,7 @@
 import { defineConfig } from 'vitepress'
 
 export default defineConfig({
-  title: 'llm-proxy-manifestd',
+  title: 'LLM Proxy ManifestD',
   description:
     'Kubernetes-native priority and concurrency proxy for OpenAI-compatible LLM endpoints: deployed with Helm, configured by a hot-reloading ConfigMap, with optional CLI sidecars.',
   srcDir: 'docs',
@@ -11,7 +11,9 @@ export default defineConfig({
   sitemap: { hostname: 'https://llm-proxy-manifestd.lerenn.dev' },
   // CNAME and other static files live in website/public.
   vite: { publicDir: '../public' },
+  head: [['link', { rel: 'icon', type: 'image/png', href: '/favicon.png' }]],
   themeConfig: {
+    logo: '/logo.svg',
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
       { text: 'GitHub', link: 'https://github.com/lerenn/llm-proxy-manifestd' },
