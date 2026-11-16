@@ -11,13 +11,15 @@ import (
 )
 
 const (
-	registry   = "ghcr.io"
-	imageRepo  = "ghcr.io/lerenn/llm-proxy-manifestd"
-	chartRepo  = "oci://ghcr.io/lerenn/charts"
-	chartPath  = "deploy/charts/llm-proxy-manifestd"
-	goImage    = "golang:1.23"
-	helmImage  = "alpine/helm:3.16.4"
-	releaseTag = `^v?[0-9]+\.[0-9]+\.[0-9]+$`
+	registry  = "ghcr.io"
+	imageRepo = "ghcr.io/lerenn/llm-proxy-manifestd"
+	// Adapter images: ghcr.io/lerenn/llm-proxy-manifestd-adapter-<name>.
+	adapterImagePrefix = "ghcr.io/lerenn/llm-proxy-manifestd-adapter-"
+	chartRepo          = "oci://ghcr.io/lerenn/charts"
+	chartPath          = "deploy/charts/llm-proxy-manifestd"
+	goImage            = "golang:1.23"
+	helmImage          = "alpine/helm:3.16.4"
+	releaseTag         = `^v?[0-9]+\.[0-9]+\.[0-9]+$`
 )
 
 // LlmProxyManifestd is the module entrypoint.
@@ -114,4 +116,74 @@ func (m *LlmProxyManifestd) PublishChart(
 			`helm push /out/llm-proxy-manifestd-"$CHART_VERSION".tgz "$CHART_REPO"`,
 		}, "\n")}).
 		Stdout(ctx)
+}
+
+// adapterImage builds the adapter image for one platform. name is the adapter
+// directory under adapters/ (e.g. "claude").
+func adapterImage(source *dagger.Directory, name string, platform dagger.Platform) *dagger.Container {
+	return source.DockerBuild(dagger.DirectoryDockerBuildOpts{
+		Platform:   platform,
+		Dockerfile: fmt.Sprintf("adapters/%s/Dockerfile", name),
+	})
+}
+
+// BuildAdapter builds the adapter image (linux/amd64) without publishing it,
+// to catch Dockerfile and binary-download breakage in CI. It also runs
+// `claude --version` inside the image.
+func (m *LlmProxyManifestd) BuildAdapter(
+	ctx context.Context,
+	// +defaultPath="/"
+	// +ignore=[".git", "website/node_modules", "website/.vitepress/dist", "website/.vitepress/cache"]
+	source *dagger.Directory,
+	// Adapter name (directory under adapters/)
+	// +default="claude"
+	name string,
+) (string, error) {
+	return adapterImage(source, name, "linux/amd64").
+		WithEntrypoint([]string{"/usr/local/bin/claude"}).
+		WithExec([]string{"--version"}, dagger.ContainerWithExecOpts{UseEntrypoint: true}).
+		Stdout(ctx)
+}
+
+// PublishAdapterImage builds a multi-arch adapter image and pushes it to
+// ghcr.io/lerenn/llm-proxy-manifestd-adapter-<name>:<tag>, with the same
+// tagging rules as PublishImage.
+func (m *LlmProxyManifestd) PublishAdapterImage(
+	ctx context.Context,
+	// +defaultPath="/"
+	// +ignore=[".git", "website/node_modules", "website/.vitepress/dist", "website/.vitepress/cache"]
+	source *dagger.Directory,
+	// Adapter name (directory under adapters/)
+	// +default="claude"
+	name string,
+	// Image tag, e.g. v0.1.0
+	tag string,
+	// Registry username
+	registryUser string,
+	// Registry token or password
+	registryToken *dagger.Secret,
+) (string, error) {
+	version := strings.TrimPrefix(tag, "v")
+	var variants []*dagger.Container
+	for _, platform := range []dagger.Platform{"linux/amd64", "linux/arm64"} {
+		variants = append(variants, adapterImage(source, name, platform))
+	}
+	tags := []string{tag}
+	if regexp.MustCompile(releaseTag).MatchString(tag) {
+		if version != tag {
+			tags = append(tags, version)
+		}
+		tags = append(tags, "latest")
+	}
+	publisher := dag.Container().WithRegistryAuth(registry, registryUser, registryToken)
+	var refs []string
+	for _, t := range tags {
+		ref, err := publisher.Publish(ctx, fmt.Sprintf("%s%s:%s", adapterImagePrefix, name, t),
+			dagger.ContainerPublishOpts{PlatformVariants: variants})
+		if err != nil {
+			return "", fmt.Errorf("publish %s: %w", t, err)
+		}
+		refs = append(refs, ref)
+	}
+	return strings.Join(refs, "\n"), nil
 }

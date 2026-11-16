@@ -21,6 +21,18 @@ jobs:
           verb: call
           args: test
 
+  adapter-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Claude adapter image
+        uses: dagger/dagger-for-github@v7
+        with:
+          version: "0.21.11"
+          verb: call
+          args: build-adapter --name=claude
+
   website:
     runs-on: ubuntu-latest
     steps:
