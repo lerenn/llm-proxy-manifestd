@@ -60,6 +60,8 @@ const manifest = `server: {listen: ":8080"}
 pools:
   my-anthropic: {upstream_url: https://api.anthropic.com, protocol: anthropic, api_key: "${PROVIDER_MY_ANTHROPIC_API_KEY}"}
   claude-sub: {upstream_url: "http://localhost:9100", protocol: anthropic}
+  nevermetered-anthropic: {upstream_url: https://nm.example, protocol: anthropic, api_key: "${K}", max_concurrency: 1, concurrency_group: nevermetered}
+  nevermetered-openai: {upstream_url: https://nm.example, protocol: openai, api_key: "${K}", max_concurrency: 1, concurrency_group: nevermetered}
 clients:
   opencode: {}
   ci: {priority: 10, endpoints: [fast, standard]}
@@ -208,9 +210,10 @@ func TestStatus(t *testing.T) {
 	s := out.String()
 	for _, want := range []string{
 		"pod proxy-new (Running)",
-		"claude-sub    claude         logged-in",
-		"codex-sub     codex          not logged-in",
-		"my-anthropic  anthropic-api  api-key",
+		"claude-sub    claude  logged-in",
+		"codex-sub     codex   not logged-in",
+		"my-anthropic  api     anthropic, max_concurrency unlimited (no login needed)",
+		"nevermetered  api     anthropic,openai, max_concurrency 1 (no login needed)",
 		"bare      -         *",
 		"ci        10        fast,standard",
 		"opencode  -         *",
@@ -273,8 +276,11 @@ func TestLogin(t *testing.T) {
 		t.Fatalf("override: %v %+v", err, ex.calls)
 	}
 
-	if err := Login(ctx, tg, ex, "my-anthropic", LoginOptions{TTY: true}); err == nil || !strings.Contains(err.Error(), "API-key provider") {
+	if err := Login(ctx, tg, ex, "my-anthropic", LoginOptions{TTY: true}); err == nil || !strings.Contains(err.Error(), "no login needed") {
 		t.Fatalf("api provider: %v", err)
+	}
+	if err := Login(ctx, tg, ex, "nevermetered", LoginOptions{TTY: true}); err == nil || !strings.Contains(err.Error(), "no login needed") {
+		t.Fatalf("api group: %v", err)
 	}
 	if err := Login(ctx, tg, ex, "nope", LoginOptions{TTY: true}); err == nil || !strings.Contains(err.Error(), "claude-sub, codex-sub") {
 		t.Fatalf("unknown: %v", err)

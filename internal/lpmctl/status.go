@@ -66,8 +66,22 @@ func Status(ctx context.Context, t *Target, ex Executor, w, errw io.Writer) erro
 	for _, p := range SidecarProviders(pod) {
 		rows = append(rows, ProviderStatus{Provider: p, State: SidecarState(ctx, ex, t.Namespace, pod.Name, p)})
 	}
-	for _, p := range APIProviders(pod, cfg) {
-		rows = append(rows, ProviderStatus{Provider: p, State: StateAPIKey})
+	if groups := cfg.APIGroups(); len(groups) > 0 {
+		for _, g := range groups {
+			mc := "unlimited"
+			if g.MaxConcurrency > 0 {
+				mc = fmt.Sprint(g.MaxConcurrency)
+			}
+			rows = append(rows, ProviderStatus{
+				Provider: Provider{Name: g.Name, Type: "api"},
+				State:    fmt.Sprintf("%s, max_concurrency %s (no login needed)", strings.Join(g.Protocols, ","), mc),
+			})
+		}
+	} else {
+		// ConfigMap unreadable: fall back to the proxy container's env.
+		for _, p := range APIProviders(pod, cfg) {
+			rows = append(rows, ProviderStatus{Provider: p, State: StateAPIKey + " (no login needed)"})
+		}
 	}
 
 	fmt.Fprintf(w, "Release %s in namespace %s, pod %s (%s)\n\n", t.Release, t.Namespace, pod.Name, pod.Status.Phase)

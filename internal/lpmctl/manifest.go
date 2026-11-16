@@ -19,7 +19,10 @@ type Manifest struct {
 
 // ManifestPool is a pool entry.
 type ManifestPool struct {
-	Protocol string `yaml:"protocol"`
+	Protocol         string `yaml:"protocol"`
+	APIKey           string `yaml:"api_key"`
+	MaxConcurrency   int    `yaml:"max_concurrency"`
+	ConcurrencyGroup string `yaml:"concurrency_group"`
 }
 
 // ManifestClient is a client entry (may be empty).
@@ -58,4 +61,49 @@ func (t *Target) LoadManifest(ctx context.Context, name string) (*Manifest, erro
 		return nil, fmt.Errorf("configmap %q has no %s key", name, configKey)
 	}
 	return ParseManifest([]byte(raw))
+}
+
+// APIGroup is an API-key provider as rendered by the chart: one pool per
+// format, all sharing a concurrency group named after the provider when there
+// are several. A single-format provider is one pool named after it.
+type APIGroup struct {
+	Name           string
+	Protocols      []string // sorted
+	MaxConcurrency int      // 0 = unlimited
+}
+
+// APIGroups returns the API-key providers found in the pools of cfg: pools
+// with an api_key (sidecar pools have none), grouped by concurrency_group
+// (pools without one stand alone). Sorted by name.
+func (m *Manifest) APIGroups() []APIGroup {
+	if m == nil {
+		return nil
+	}
+	by := map[string]*APIGroup{}
+	for pn, p := range m.Pools {
+		if p.APIKey == "" {
+			continue
+		}
+		name := p.ConcurrencyGroup
+		if name == "" {
+			name = pn
+		}
+		g := by[name]
+		if g == nil {
+			g = &APIGroup{Name: name, MaxConcurrency: p.MaxConcurrency}
+			by[name] = g
+		}
+		proto := p.Protocol
+		if proto == "" {
+			proto = "openai"
+		}
+		g.Protocols = append(g.Protocols, proto)
+	}
+	out := make([]APIGroup, 0, len(by))
+	for _, g := range by {
+		sort.Strings(g.Protocols)
+		out = append(out, *g)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
