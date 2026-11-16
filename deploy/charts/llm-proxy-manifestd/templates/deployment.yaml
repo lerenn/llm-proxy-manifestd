@@ -183,6 +183,8 @@ spec:
           image: "{{ $img.repository }}:{{ $img.tag | default $.Chart.AppVersion }}"
           imagePullPolicy: {{ $img.pullPolicy }}
           env:
+            - name: ADAPTER_TYPE
+              value: {{ .type | quote }}
             - name: ADAPTER_LISTEN
               value: "127.0.0.1:{{ .port }}"
             - name: {{ .homeEnv }}
@@ -190,12 +192,10 @@ spec:
             {{- with $a.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          readinessProbe:
-            # exec, not httpGet: the adapter listens on loopback only.
-            exec:
-              command: ["/usr/local/bin/adapter-{{ .type }}", "ready"]
-            periodSeconds: 10
-            timeoutSeconds: 5
+          # No readinessProbe on purpose: an adapter that is not logged in
+          # must not make the whole pod NotReady (the Service would lose its
+          # endpoints, taking api pools and failover targets down with it).
+          # `adapter-<type> ready` is still used by lpmctl status.
           securityContext:
             runAsUser: 10001
             allowPrivilegeEscalation: false
@@ -221,6 +221,11 @@ spec:
           secret:
             secretName: {{ include "llm-proxy-manifestd.clientKeysSecret" . }}
             defaultMode: 0440
+            {{- if include "llm-proxy-manifestd.keysManager" . }}
+            # Created at runtime by the keys-manager init container: the volume
+            # must not block pod start (deadlock). Required for a user-owned Secret.
+            optional: true
+            {{- end }}
         {{- end }}
         {{- if include "llm-proxy-manifestd.keysManager" . }}
         # API token for the keys-manager init container ONLY.

@@ -61,7 +61,7 @@ ci        10        fast
 opencode  -         *
 ```
 
-- **Sidecar providers** (`claude`, `codex`) are found from the pod spec: every container whose readiness probe runs `adapter-<type> ready`. lpmctl execs that same check in the container: exit 0 is `logged-in`, any other exit `not logged-in`. If the exec itself fails (container not running, no RBAC) the status is `unknown (<reason>)`.
+- **Sidecar providers** (`claude`, `codex`) are found from the pod spec: every container with an `ADAPTER_TYPE` env var. lpmctl execs that same check in the container: exit 0 is `logged-in`, any other exit `not logged-in`. If the exec itself fails (container not running, no RBAC) the status is `unknown (<reason>)`.
 - **API providers** (`type: api`, `anthropic-api`, `openai-api`) have no container and nothing to log in to. They are read from the pools of the ConfigMap's `config.yaml` (pools with an `api_key`): the pools of a `concurrency_group` (e.g. `nevermetered-anthropic` and `nevermetered-openai`) are shown on one line named after the group, with their protocols and `max_concurrency`, marked `no login needed`. If the ConfigMap is unreadable, they fall back to the proxy container's `PROVIDER_*_API_KEY` env.
 - **Clients** come from `clients` in the proxy ConfigMap's `config.yaml` (priority `-` means the endpoint's own priority, endpoints `*` means every endpoint). Keys are not read by `status`.
 
@@ -79,7 +79,7 @@ lpmctl login claude-subscription
 lpmctl login claude-subscription -- claude setup-token   # anything after -- replaces the command
 ```
 
-API providers are refused with a clear message (no login needed; their key comes from a Secret). `login` needs a terminal on both stdin and stdout. The sidecar becomes Ready within one readiness period (10 s) after the login is stored; check with `lpmctl status`.
+API providers are refused with a clear message (no login needed; their key comes from a Secret). `login` needs a terminal on both stdin and stdout. The adapter starts accepting requests as soon as the login is stored (the pod is Ready regardless); check with `lpmctl status`.
 
 ## RBAC
 

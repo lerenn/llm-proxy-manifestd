@@ -7,7 +7,6 @@ package lpmctl
 import (
 	"context"
 	"fmt"
-	"path"
 	"sort"
 	"strings"
 
@@ -160,22 +159,26 @@ type Provider struct {
 }
 
 // SidecarProviders returns the CLI adapter sidecars of the pod: containers
-// whose readiness probe execs /…/adapter-<type> ready. Sorted by name.
+// carrying an ADAPTER_TYPE env var (claude, codex). They have no readiness
+// probe (they must not gate pod readiness); the login state is checked by
+// exec'ing /usr/local/bin/adapter-<type> ready. Sorted by name.
 func SidecarProviders(pod *corev1.Pod) []Provider {
 	var out []Provider
 	for _, c := range pod.Spec.Containers {
-		if c.ReadinessProbe == nil || c.ReadinessProbe.Exec == nil || len(c.ReadinessProbe.Exec.Command) == 0 {
-			continue
+		typ := ""
+		for _, e := range c.Env {
+			if e.Name == "ADAPTER_TYPE" {
+				typ = e.Value
+			}
 		}
-		bin := path.Base(c.ReadinessProbe.Exec.Command[0])
-		if !strings.HasPrefix(bin, adapterPrefix) || len(bin) == len(adapterPrefix) {
+		if typ == "" {
 			continue
 		}
 		out = append(out, Provider{
 			Name:         c.Name,
-			Type:         strings.TrimPrefix(bin, adapterPrefix),
+			Type:         typ,
 			Sidecar:      true,
-			ReadyCommand: append([]string(nil), c.ReadinessProbe.Exec.Command...),
+			ReadyCommand: []string{"/usr/local/bin/" + adapterPrefix + typ, "ready"},
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
