@@ -16,16 +16,9 @@ type loginFlow struct {
 }
 
 // loginFlows maps sidecar types to their CLI login. The login directory
-// (CLAUDE_CONFIG_DIR, CODEX_HOME) is already set in the container env and
+// (CODEX_HOME) is already set in the container env and
 // lives on the provider's PVC.
 var loginFlows = map[string]loginFlow{
-	"claude": {
-		Command: []string{"claude"},
-		Hint: `Headless login: in the Claude prompt, type /login and pick your subscription.
-Open the printed URL in a browser on THIS machine, sign in, copy the code shown
-and paste it back here. Then type /exit. The login is stored on the provider's
-volume and the sidecar becomes ready within ~10s.`,
-	},
 	"codex": {
 		Command: []string{"codex", "login", "--device-auth"},
 		Hint: `Headless login (device code): open the printed URL in a browser on any device,

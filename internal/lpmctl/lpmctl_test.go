@@ -248,8 +248,7 @@ func TestLogin(t *testing.T) {
 	tg := &Target{Client: fake.NewSimpleClientset(objects()...), Namespace: ns, Release: "proxy"}
 
 	for typ, want := range map[string][]string{
-		"claude-sub": {"claude"},
-		"codex-sub":  {"codex", "login", "--device-auth"},
+		"codex-sub": {"codex", "login", "--device-auth"},
 	} {
 		ex := &fakeExec{}
 		var errw bytes.Buffer
@@ -283,7 +282,7 @@ func TestLogin(t *testing.T) {
 	if err := Login(ctx, tg, ex, "nope", LoginOptions{TTY: true}); err == nil || !strings.Contains(err.Error(), "claude-sub, codex-sub") {
 		t.Fatalf("unknown: %v", err)
 	}
-	if err := Login(ctx, tg, ex, "claude-sub", LoginOptions{}); err == nil || !strings.Contains(err.Error(), "terminal") {
+	if err := Login(ctx, tg, ex, "codex-sub", LoginOptions{}); err == nil || !strings.Contains(err.Error(), "terminal") {
 		t.Fatalf("no tty: %v", err)
 	}
 }

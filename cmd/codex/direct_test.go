@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"io"
 	"net/http"
@@ -62,7 +63,7 @@ func TestTokenRefreshWhenExpired(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"OPENAI_API_KEY":null,"tokens":{"access_token":"`+fakeJWT(1)+`","refresh_token":"old-r","account_id":"a"}}`), 0o600)
 	ts := newTokenSource(home)
 	ts.tokURL = tsrv.URL
-	got, acct, err := ts.Token(t.Context())
+	got, acct, err := ts.Token(context.Background())
 	if err != nil || got != newTok || acct != "a" {
 		t.Fatalf("got=%q acct=%q err=%v", got, acct, err)
 	}

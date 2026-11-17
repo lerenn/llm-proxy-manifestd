@@ -65,7 +65,7 @@ sec=$(awk '/- name: keys-manager/{f=1} /- name: llm-proxy-manifestd$/{f=0} f' <<
 for p in 'readOnlyRootFilesystem: true' 'runAsNonRoot: true' 'drop: \["ALL"\]'; do grep -qE "$p" <<<"$sec" || fail "keysmgr-hardening ($p)"; done; ok keysmgr-hardening
 # token stays out of the main container with sidecar providers
 out2=$(full "$(v n "config: {clients: {a: {}}}
-providers: {c: {type: claude}}")") && [ "$(grep -c 'kube-api-access' <<<"$out2")" -eq 2 ] && grep -q 'automountServiceAccountToken: false' <<<"$out2" && ok token-only-in-init-sidecars || fail token-only-in-init-sidecars
+providers: {c: {type: codex}}")") && [ "$(grep -c 'kube-api-access' <<<"$out2")" -eq 2 ] && grep -q 'automountServiceAccountToken: false' <<<"$out2" && ok token-only-in-init-sidecars || fail token-only-in-init-sidecars
 # escape hatch
 out3=$(full "$(v o "clientsExistingSecret: mine
 config: {clients: {a: {}}}")")
@@ -74,7 +74,7 @@ config: {clients: {a: {}}}")")
 grep -A4 'secretName: r-llm-proxy-manifestd-client-keys' <<<"$out" | grep -q 'optional: true' && ok keys-volume-optional-generated || fail keys-volume-optional-generated
 ! grep -A4 'secretName: mine' <<<"$out3" | grep -q 'optional' && ok keys-volume-required-existing || fail keys-volume-required-existing
 # adapters never gate readiness; proxy keeps its probe
-out5=$(full "$(v q "providers: {c: {type: claude}}")")
+out5=$(full "$(v q "providers: {c: {type: codex}}")")
 [ "$(grep -c '^          readinessProbe:' <<<"$out5")" -eq 1 ] && grep -q 'ADAPTER_TYPE' <<<"$out5" && ok adapters-no-readiness || fail adapters-no-readiness
 # no clients: nothing
 out4=$(full "$(v p "{}")")
@@ -82,7 +82,7 @@ out4=$(full "$(v p "{}")")
 
 # --- adapters.mode=separate + valkey (rolling updates) ---
 sep="adapters: {mode: separate}
-providers: {cl: {type: claude, maxConcurrency: 2}, cx: {type: codex}}"
+providers: {cl: {type: codex, maxConcurrency: 2}, cx: {type: codex}}"
 vk="valkey: {enabled: true}"
 outS=$(full "$(v s1 "$sep
 $vk
@@ -119,13 +119,13 @@ outR=$(full "$(v s5 "$sep
 config: {coordination: {valkey: {address: 'my:6379'}}}")"); pR=$(awk 'BEGIN{RS="---\n"} /kind: Deployment/ && /name: r-llm-proxy-manifestd\n/ {print}' <<<"$outR")
 grep -q 'type: RollingUpdate' <<<"$pR" && ok coordination-rolling || fail coordination-rolling
 # sidecar mode untouched
-outSC=$(full "$(v s6 "providers: {cl: {type: claude}}")"); pSC=$(awk 'BEGIN{RS="---\n"} /kind: Deployment/ && /name: r-llm-proxy-manifestd\n/ {print}' <<<"$outSC")
+outSC=$(full "$(v s6 "providers: {cl: {type: codex}}")"); pSC=$(awk 'BEGIN{RS="---\n"} /kind: Deployment/ && /name: r-llm-proxy-manifestd\n/ {print}' <<<"$outSC")
 grep -q 'type: Recreate' <<<"$pSC" && grep -q 'ADAPTER_LISTEN' <<<"$pSC" && grep -q '127.0.0.1:9100' <<<"$pSC" && ! grep -q 'adapter-token\|ADAPTER_TOKEN' <<<"$outSC" && ok sidecar-mode-unchanged || fail sidecar-mode-unchanged
 # render errors
 errc() { local o; o=$(full "$2") && { fail "$1 (should fail)"; return; }; grep -qF "$3" <<<"$o" && ok "$1" || fail "$1 (wrong error: $o)"; }
 errc bad-mode "$(v e1 "adapters: {mode: nope}")" 'adapters.mode must be'
 errc replicas-sidecar "$(v e2 "replicaCount: 2
-providers: {cl: {type: claude}}")" 'replicaCount > 1'
+providers: {cl: {type: codex}}")" 'replicaCount > 1'
 errc replicas-no-limiter "$(v e3 "replicaCount: 2
 $sep")" 'replicaCount > 1'
 

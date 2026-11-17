@@ -117,13 +117,6 @@ providerStorage:
 # excepted). Sidecar mode is unchanged (loopback, no token). Adapters never gate the proxy's readiness.
 adapters:
   mode: sidecar   # sidecar | separate
-  claude:
-    image:
-      repository: ghcr.io/lerenn/llm-proxy-manifestd-adapter-claude
-      # Defaults to the chart appVersion (adapter and proxy are released together).
-      tag: ""
-      pullPolicy: IfNotPresent
-    resources: {}
   codex:   # experimental
     image:
       repository: ghcr.io/lerenn/llm-proxy-manifestd-adapter-codex
