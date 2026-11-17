@@ -112,7 +112,7 @@
     });
     current = v;
     if (v === 'live' && last) renderLive(last);
-    document.title = v.charAt(0).toUpperCase() + v.slice(1) + ' · llm-proxy-manifestd dashboard';
+    document.title = v.charAt(0).toUpperCase() + v.slice(1) + ' · LLM Proxy Manifestd dashboard';
     closeNav();
   }
   function closeNav() {
