@@ -143,6 +143,8 @@
     if (text != null) e.textContent = text;
     return e;
   }
+  // Keep header text inside the node: ellipsize (full text stays in a <title> tooltip).
+  function clip(t, n) { return t.length > n ? t.slice(0, n - 1) + '…' : t; }
   function modelOf(ep, t) { return t.target_model || ep.name; }
   function renderLive(s) {
     var pools = s.pools || [], eps = s.endpoints || [];
@@ -181,11 +183,11 @@
         var b = byPool[n], h = HEAD + Math.max(1, b.models.length) * (ROW + GAP) + 4;
         var g = svg('g', { 'class': 'pool' });
         var rect = svg('rect', { x: X2, y: y, width: PW, height: h, rx: 10 });
-        var title = svg('text', { x: X2 + PADX, y: y + 20, 'class': 'ptitle' }, b.title);
+        var title = svg('text', { x: X2 + PADX, y: y + 20, 'class': 'ptitle' }, clip(b.title, 20));
+        title.appendChild(svg('title', {}, b.title));
         var sub = svg('text', { x: X2 + PADX, y: y + 36, 'class': 'psub' });
         var badge = svg('text', { x: X2 + PW - PADX, y: y + 20, 'class': 'pbadge', 'text-anchor': 'end' });
-        var note = svg('text', { x: X2 + PW - PADX, y: y + 36, 'class': 'psub', 'text-anchor': 'end' });
-        [rect, title, sub, badge, note].forEach(function (e) { g.appendChild(e); });
+        [rect, title, sub, badge].forEach(function (e) { g.appendChild(e); });
         layer.nodes.appendChild(g);
         b.models.forEach(function (m, i) {
           var my = y + HEAD + i * (ROW + GAP);
@@ -195,7 +197,7 @@
           mg.appendChild(svg('text', { x: X2 + PADX + 10, y: my + ROW / 2 + 4 }, m.length > 30 ? m.slice(0, 29) + '…' : m)).appendChild(svg('title', {}, m));
           layer.nodes.appendChild(mg);
         });
-        live.els.pools[n] = { rect: rect, sub: sub, badge: badge, note: note, top: y, h: h };
+        live.els.pools[n] = { rect: rect, sub: sub, badge: badge, top: y, h: h };
         y += h + PGAP;
       });
       var poolsH = y;
@@ -252,9 +254,9 @@
       if (!e) return;
       var sat = !p.unlimited && p.active_slots >= p.max_concurrency;
       e.rect.setAttribute('class', sat ? 'sat' : (p.active_slots > 0 ? 'busy' : ''));
-      e.sub.textContent = byPool[n].protos.join(' + ') + ' · ' + p.active_slots + (p.unlimited ? '' : '/' + p.max_concurrency) + ' slots' + (p.coordinated ? ' · shared' : '');
+      var subTxt = byPool[n].protos.join(' + ') + ' · ' + p.active_slots + (p.unlimited ? '' : '/' + p.max_concurrency) + ' slots' + (p.coordinated ? ' · shared' : '');
+      if (e.sub.textContent !== clip(subTxt, 40)) { e.sub.textContent = clip(subTxt, 40); e.sub.appendChild(svg('title', {}, subTxt)); }
       e.badge.textContent = p.queued > 0 ? p.queued + ' queued' : '';
-      e.note.textContent = '';
     });
     live.els.arrows.forEach(function (a) {
       var p = byPool[a.pool].p;
