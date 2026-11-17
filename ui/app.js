@@ -146,11 +146,17 @@
   function modelOf(ep, t) { return t.target_model || ep.name; }
   function renderLive(s) {
     var pools = s.pools || [], eps = s.endpoints || [];
-    var byPool = {}, poolOrder = [];
-    pools.forEach(function (p) { byPool[p.name] = { p: p, models: [] }; poolOrder.push(p.name); });
+    // Pools sharing a concurrency group are one provider: show a single node per group.
+    var byPool = {}, poolOrder = [], nodeOf = {};
+    pools.forEach(function (p) {
+      var k = p.concurrency_group ? 'g\0' + p.concurrency_group : 'p\0' + p.name;
+      nodeOf[p.name] = k;
+      if (!byPool[k]) { byPool[k] = { p: p, models: [], title: p.concurrency_group || p.name, protos: [] }; poolOrder.push(k); }
+      if (p.protocol && byPool[k].protos.indexOf(p.protocol) < 0) byPool[k].protos.push(p.protocol);
+    });
     eps.forEach(function (ep) {
       ep.targets.forEach(function (t) {
-        var b = byPool[t.pool];
+        var b = byPool[nodeOf[t.pool]];
         if (b && b.models.indexOf(modelOf(ep, t)) < 0) b.models.push(modelOf(ep, t));
       });
     });
@@ -158,8 +164,8 @@
     var routes = eps.slice().sort(function (a, b) { return a.protocol === b.protocol ? 0 : (a.protocol < b.protocol ? -1 : 1); });
     var ROW = 34, GAP = 8, RW = 190, MW = 220, PADX = 14, PW = MW + 2 * PADX, HEAD = 44, PGAP = 18, TOP = 28, X1 = 10, X2 = 10 + RW + 360;
     // Structure signature: only rebuild the DOM when the topology changes.
-    var sig = JSON.stringify([routes.map(function (e) { return [e.protocol, e.name, e.targets.map(function (t) { return [t.pool, modelOf(e, t)]; })]; }),
-      poolOrder.map(function (n) { return [n, byPool[n].p.concurrency_group || '', byPool[n].models]; })]);
+    var sig = JSON.stringify([routes.map(function (e) { return [e.protocol, e.name, e.targets.map(function (t) { return [nodeOf[t.pool], modelOf(e, t)]; })]; }),
+      poolOrder.map(function (n) { return [n, byPool[n].title, byPool[n].models]; })]);
     var svgEl = $('live');
     if (sig !== live.sig) {
       live.sig = sig; live.els = { routes: {}, pools: {}, arrows: [] };
@@ -175,7 +181,7 @@
         var b = byPool[n], h = HEAD + Math.max(1, b.models.length) * (ROW + GAP) + 4;
         var g = svg('g', { 'class': 'pool' });
         var rect = svg('rect', { x: X2, y: y, width: PW, height: h, rx: 10 });
-        var title = svg('text', { x: X2 + PADX, y: y + 20, 'class': 'ptitle' }, n);
+        var title = svg('text', { x: X2 + PADX, y: y + 20, 'class': 'ptitle' }, b.title);
         var sub = svg('text', { x: X2 + PADX, y: y + 36, 'class': 'psub' });
         var badge = svg('text', { x: X2 + PW - PADX, y: y + 20, 'class': 'pbadge', 'text-anchor': 'end' });
         var note = svg('text', { x: X2 + PW - PADX, y: y + 36, 'class': 'psub', 'text-anchor': 'end' });
@@ -195,7 +201,7 @@
       var poolsH = y;
       // Routes.
       var ry = TOP, lastProto = '', routeH = 0, fan = {}, seen = {};
-      routes.forEach(function (ep) { ep.targets.forEach(function (t) { var k = t.pool + '\0' + modelOf(ep, t); fan[k] = (fan[k] || 0) + 1; }); });
+      routes.forEach(function (ep) { ep.targets.forEach(function (t) { var k = nodeOf[t.pool] + '\0' + modelOf(ep, t); fan[k] = (fan[k] || 0) + 1; }); });
       routes.forEach(function (ep) {
         if (ep.protocol !== lastProto) {
           lastProto = ep.protocol;
@@ -212,7 +218,7 @@
         live.els.routes[key] = { q: q, ep: ep };
         var cy = ry + (ROW + 4) / 2;
         ep.targets.forEach(function (t, i) {
-          var mk = t.pool + '\0' + modelOf(ep, t), ty = modelPos[mk];
+          var mk = nodeOf[t.pool] + '\0' + modelOf(ep, t), ty = modelPos[mk];
           if (ty == null) return;
           var k = seen[mk] = (seen[mk] || 0) + 1;
           ty += (k - 1 - (fan[mk] - 1) / 2) * 11; // fan arrows out on the model's edge
@@ -222,7 +228,7 @@
           path.addEventListener('focus', function () { lbl.classList.add('focus'); });
           path.addEventListener('blur', function () { lbl.classList.remove('focus'); });
           layer.links.appendChild(path); layer.labels.appendChild(lbl);
-          live.els.arrows.push({ path: path, lbl: lbl, key: key, i: i, pool: t.pool, model: modelOf(ep, t), order: i > 0 ? String(i + 1) : '' });
+          live.els.arrows.push({ path: path, lbl: lbl, key: key, i: i, pool: nodeOf[t.pool], model: modelOf(ep, t), order: i > 0 ? String(i + 1) : '' });
         });
         ry += ROW + 4 + GAP;
       });
@@ -246,9 +252,9 @@
       if (!e) return;
       var sat = !p.unlimited && p.active_slots >= p.max_concurrency;
       e.rect.setAttribute('class', sat ? 'sat' : (p.active_slots > 0 ? 'busy' : ''));
-      e.sub.textContent = (p.protocol || '') + (p.concurrency_group ? ' · group ' + p.concurrency_group : '') + ' · ' + p.active_slots + (p.unlimited ? '' : '/' + p.max_concurrency) + ' slots';
+      e.sub.textContent = byPool[n].protos.join(' + ') + ' · ' + p.active_slots + (p.unlimited ? '' : '/' + p.max_concurrency) + ' slots' + (p.coordinated ? ' · shared' : '');
       e.badge.textContent = p.queued > 0 ? p.queued + ' queued' : '';
-      e.note.textContent = p.coordinated ? 'slots shared; links: this pod' : '';
+      e.note.textContent = '';
     });
     live.els.arrows.forEach(function (a) {
       var p = byPool[a.pool].p;
@@ -257,7 +263,7 @@
       if (a.path.getAttribute('class') !== cls) a.path.setAttribute('class', cls);
       if (a.lbl.textContent !== (a.order ? '#' + a.order + ' ' + txt : txt)) a.lbl.textContent = a.order ? '#' + a.order + ' ' + txt : txt;
       a.lbl.setAttribute('class', 'llabel' + (a.x > 0 ? ' on' : '') + (a.lbl.classList.contains('focus') ? ' focus' : ''));
-      var label = a.key.split('/')[1] + ' to ' + a.model + ' in ' + a.pool + ': ' + a.x + (p.unlimited ? ' active' : ' of ' + p.max_concurrency + ' active') + (a.order ? ' (failover target ' + a.order + ')' : '') + (a.skipped ? ', skipped ' + a.skipped + ' (concurrency full)' : '');
+      var label = a.key.split('/')[1] + ' to ' + a.model + ' in ' + byPool[a.pool].title + ': ' + a.x + (p.unlimited ? ' active' : ' of ' + p.max_concurrency + ' active') + (a.order ? ' (failover target ' + a.order + ')' : '') + (a.skipped ? ', skipped ' + a.skipped + ' (concurrency full)' : '');
       if (a.path.getAttribute('aria-label') !== label) a.path.setAttribute('aria-label', label);
     });
     for (var k in live.els.routes) {
