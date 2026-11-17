@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -446,5 +447,20 @@ func TestCoordinationBlock(t *testing.T) {
 	}
 	if c, err := Parse([]byte(base)); err != nil || c.Coordination != nil {
 		t.Fatal("absent coordination must stay nil")
+	}
+}
+
+func TestWhenConcurrencyFullParse(t *testing.T) {
+	base := "pools:\n  a: {upstream_url: 'http://x', max_concurrency: 1}\n  b: {upstream_url: 'http://y'}\nendpoints:\n  openai:\n    m: {targets: [{pool: a%s}, {pool: b}]}\n"
+	c, err := Parse([]byte(fmt.Sprintf(base, ", when_concurrency_full: skip")))
+	if err != nil || !c.Endpoints["openai"]["m"].Targets[0].Skips() {
+		t.Fatalf("%v", err)
+	}
+	c, err = Parse([]byte(fmt.Sprintf(base, "")))
+	if err != nil || c.Endpoints["openai"]["m"].Targets[0].WhenConcurrencyFull != "wait" {
+		t.Fatalf("default must be wait: %v", err)
+	}
+	if _, err = Parse([]byte(fmt.Sprintf(base, ", when_concurrency_full: maybe"))); err == nil || !strings.Contains(err.Error(), `unknown when_concurrency_full "maybe"`) {
+		t.Fatalf("%v", err)
 	}
 }

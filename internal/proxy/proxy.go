@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -341,6 +342,7 @@ type failoverTransport struct {
 	body         []byte // original body
 	rc           *routeCounters
 	rr           *atomic.Uint64
+	counted      map[int]bool // targets already counted as skipped_concurrency_full
 }
 
 func (t *failoverTransport) priority(i int) int {
@@ -390,25 +392,53 @@ func (t *failoverTransport) order(remaining []int, rrStart int) (cands []int, fi
 	return cands, false
 }
 
+// skips reports whether target i is skipped instead of waited on when its
+// pool is busy: it has when_concurrency_full: skip and is not the endpoint's last target.
+func (t *failoverTransport) skips(i int) bool {
+	return t.ep.Targets[i].Skips() && i != len(t.ep.Targets)-1
+}
+
 // acquire picks a target among remaining and takes a slot on its pool. The
-// first candidate (in mode order) with a free slot wins. If none has one the
+// first candidate (in mode order) with a free slot wins; a busy target with
+// when_concurrency_full: skip is passed over at once. If no candidate has a free slot the
 // request queues: on the least loaded pool (active+queued, ties by list
-// order) in least-inflight mode, on the first candidate otherwise.
+// order) in least-inflight mode, on the first candidate otherwise. Skipped
+// targets are never queued on, unless nothing else is left (after failovers).
 func (t *failoverTransport) acquire(ctx context.Context, remaining []int, rrStart int) (idx int, release func(), wait time.Duration, err error) {
 	start := time.Now()
 	cands, firstOnly := t.order(remaining, rrStart)
-	if firstOnly {
-		cands = cands[:1]
-	}
+	var skipped, waitCands []int
 	for _, i := range cands {
 		if rel, ok := t.st.Pools[t.ep.Targets[i].Pool].TryAcquire(); ok {
+			t.countSkipped(skipped)
 			return i, rel, time.Since(start), nil
 		}
+		if t.skips(i) {
+			skipped = append(skipped, i)
+			continue
+		}
+		waitCands = append(waitCands, i)
+		if firstOnly {
+			break
+		}
 	}
-	best := cands[0]
+	if len(waitCands) == 0 {
+		// Every remaining target is a skip target (the endpoint's last one
+		// already failed): wait on the one latest in the list.
+		last := skipped[0]
+		for _, i := range skipped {
+			if i > last {
+				last = i
+			}
+		}
+		waitCands = []int{last}
+		skipped = slices.DeleteFunc(skipped, func(i int) bool { return i == last })
+	}
+	t.countSkipped(skipped)
+	best := waitCands[0]
 	if t.ep.Mode == config.ModeLeastInflight {
 		bestLoad := -1
-		for _, i := range remaining {
+		for _, i := range waitCands {
 			s := t.st.Pools[t.ep.Targets[i].Pool].Stats()
 			if l := s.Active + s.QueueDepth; bestLoad < 0 || l < bestLoad {
 				best, bestLoad = i, l
@@ -434,6 +464,22 @@ func (t *failoverTransport) acquire(ctx context.Context, remaining []int, rrStar
 		return 0, nil, 0, &acquireError{aerr}
 	}
 	return best, rel, time.Since(start), nil
+}
+
+// countSkipped bumps the skipped_concurrency_full counter of each target, once per
+// request and target.
+func (t *failoverTransport) countSkipped(idx []int) {
+	for _, i := range idx {
+		if t.counted == nil {
+			t.counted = map[int]bool{}
+		}
+		if t.counted[i] {
+			continue
+		}
+		t.counted[i] = true
+		tg := t.ep.Targets[i]
+		t.rc.skips(tg.Pool, tg.TargetModel).Add(1)
+	}
 }
 
 func (t *failoverTransport) RoundTrip(req *http.Request) (*http.Response, error) {

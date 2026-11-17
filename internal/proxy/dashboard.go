@@ -24,6 +24,18 @@ type routeCounters struct {
 	// Keyed by name, not index, so a hot reload that reorders targets keeps
 	// counts attached to the right link. Per pod, not shared through Valkey.
 	links sync.Map // linkKey -> *atomic.Int64
+	// skipped counts requests that passed over a (pool, target_model) link
+	// because its pool was busy (when_concurrency_full: skip). Never touches links.
+	skipped sync.Map // linkKey -> *atomic.Int64
+}
+
+func (c *routeCounters) skips(pool, targetModel string) *atomic.Int64 {
+	k := linkKey(pool, targetModel)
+	if v, ok := c.skipped.Load(k); ok {
+		return v.(*atomic.Int64)
+	}
+	v, _ := c.skipped.LoadOrStore(k, new(atomic.Int64))
+	return v.(*atomic.Int64)
 }
 
 func linkKey(pool, targetModel string) string { return pool + "\x00" + targetModel }
@@ -124,6 +136,10 @@ type dashboardTarget struct {
 	// InFlight is the number of requests of this route currently holding a
 	// slot in Pool and being served with TargetModel (this pod only).
 	InFlight int64 `json:"in_flight"`
+	// WhenConcurrencyFull is "wait" or "skip"; SkippedConcurrencyFull counts requests that passed
+	// over this target because its pool was busy (this pod, since start).
+	WhenConcurrencyFull    string `json:"when_concurrency_full"`
+	SkippedConcurrencyFull int64  `json:"skipped_concurrency_full"`
 }
 
 type dashboardEndpoint struct {
@@ -225,7 +241,8 @@ func (h *Handler) dashboardSnapshot() (dashboardState, bool) {
 			rc := h.counters(counterKey(proto, n))
 			ts := make([]dashboardTarget, len(e.Targets))
 			for i, t := range e.Targets {
-				ts[i] = dashboardTarget{Pool: t.Pool, Upstream: upstream[t.Pool], Target: t.TargetModel, Priority: e.QueuePriority(i), InFlight: rc.link(t.Pool, t.TargetModel).Load()}
+				ts[i] = dashboardTarget{Pool: t.Pool, Upstream: upstream[t.Pool], Target: t.TargetModel, Priority: e.QueuePriority(i), InFlight: rc.link(t.Pool, t.TargetModel).Load(),
+					WhenConcurrencyFull: t.WhenConcurrencyFull, SkippedConcurrencyFull: rc.skips(t.Pool, t.TargetModel).Load()}
 			}
 			de := dashboardEndpoint{
 				Protocol: proto, Name: n, Mode: e.Mode, Priority: e.Priority, Targets: ts,
