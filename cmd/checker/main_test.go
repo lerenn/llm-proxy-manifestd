@@ -106,3 +106,26 @@ func TestCheckerConcurrencyGroup(t *testing.T) {
 		t.Fatalf("mismatch should fail, code=%d", code)
 	}
 }
+
+func TestCheckerWarnsLastTargetSkip(t *testing.T) {
+	y := "pools:\n  a: {upstream_url: 'http://x', max_concurrency: 1}\n  b: {upstream_url: 'http://y', max_concurrency: 1}\nendpoints:\n  openai:\n    r: {targets: [{pool: a, when_concurrency_full: skip}, {pool: b, when_concurrency_full: skip}]}\n"
+	code, _, errs := check(t, y)
+	if code != 0 || !strings.Contains(errs, "last target has when_concurrency_full: skip") || strings.Count(errs, "warning") != 1 {
+		t.Fatalf("code=%d err=%q", code, errs)
+	}
+	code, _, errs = check(t, strings.Replace(y, "{pool: b, when_concurrency_full: skip}", "{pool: b}", 1))
+	if code != 0 || errs != "" {
+		t.Fatalf("code=%d err=%q", code, errs)
+	}
+}
+
+func TestCheckerRejectsUnknownWhenConcurrencyFull(t *testing.T) {
+	code, _, errs := check(t, "pools:\n  a: {upstream_url: 'http://x', max_concurrency: 1}\nendpoints:\n  openai:\n    r: {targets: [{pool: a, when_concurrency_full: nope}]}\n")
+	if code != 1 || !strings.Contains(errs, `unknown when_concurrency_full "nope"`) {
+		t.Fatalf("code=%d err=%q", code, errs)
+	}
+	code, _, errs = check(t, "pools:\n  a: {upstream_url: 'http://x', max_concurrency: 1, when_concurrency_full: skip}\nendpoints:\n  openai:\n    r: {targets: [{pool: a}]}\n")
+	if code != 1 || !strings.Contains(errs, "when_concurrency_full") {
+		t.Fatalf("pool-level when_concurrency_full must be rejected: code=%d err=%q", code, errs)
+	}
+}

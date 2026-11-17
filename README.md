@@ -68,7 +68,7 @@ endpoints:
     codex-default: {targets: [{pool: codex-sub, target_model: gpt-5.4}]}
 ```
 
-`least-inflight` takes the target with the fewest in-flight requests that has a free slot, `round-robin` rotates the starting target, `failover` sticks to the first target and only moves on when it fails. In every mode a transport error or 5xx before any response byte is retried on the next untried target; 4xx is never retried. `target_model` is opaque (an `@medium` suffix means nothing to the proxy). The pool key is sent as `Authorization: Bearer` (openai) or `x-api-key` (anthropic); the client's credentials are never forwarded.
+`least-inflight` takes the target with the fewest in-flight requests that has a free slot, `round-robin` rotates the starting target, `failover` sticks to the first target and only moves on when it fails. In every mode a transport error or 5xx before any response byte is retried on the next untried target; 4xx is never retried. A target can set `when_concurrency_full: skip` to spill to the next target immediately instead of queuing when its pool is full (never applied to the last target; see the multi-pool routing guide). `target_model` is opaque (an `@medium` suffix means nothing to the proxy). The pool key is sent as `Authorization: Bearer` (openai) or `x-api-key` (anthropic); the client's credentials are never forwarded.
 
 `GET /v1/models` lists the endpoint names of the caller's protocol: Anthropic shape when the request has an `anthropic-version` or `x-api-key` header, OpenAI shape otherwise.
 

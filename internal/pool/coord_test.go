@@ -269,3 +269,34 @@ func TestSharedResizeAppliesToSharedLimit(t *testing.T) {
 		}
 	})
 }
+
+func TestSharedTryAcquireNeverQueues(t *testing.T) {
+	eachServer(t, func(t *testing.T, addr string) {
+		pre := prefix(t)
+		a := NewShared(1, 0, newCoord(t, addr, pre, 30*time.Second, false), "p")
+		b := NewShared(1, 0, newCoord(t, addr, pre, 30*time.Second, false), "p")
+		rel, ok := a.TryAcquire()
+		if !ok {
+			t.Fatal("free slot must be taken")
+		}
+		if _, ok := b.TryAcquire(); ok {
+			t.Fatal("slot held on another pod: try must fail")
+		}
+		if s := b.Stats(); s.QueueDepth != 0 || s.Active != 1 {
+			t.Fatalf("failed try left state behind: %+v", s)
+		}
+		// A waiter ahead in the queue blocks try-acquire even once the slot frees.
+		done := make(chan func(), 1)
+		go func() { r, _ := b.Acquire(context.Background(), 0); done <- r }()
+		waitQueue(t, b, 1)
+		rel()
+		if r, ok := a.TryAcquire(); ok {
+			r()
+			t.Fatal("try-acquire jumped the queue")
+		}
+		(<-done)()
+		if s := a.Stats(); s.QueueDepth != 0 || s.Active != 0 {
+			t.Fatalf("leftover state %+v", s)
+		}
+	})
+}

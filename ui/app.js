@@ -238,6 +238,7 @@
     live.els.arrows.forEach(function (a) {
       var ep = epByKey[a.key], t = ep && ep.targets[a.i];
       a.x = t ? t.in_flight || 0 : 0;
+      a.skipped = t ? t.skipped_concurrency_full || 0 : 0;
       perPool[a.pool] = (perPool[a.pool] || 0) + a.x;
     });
     poolOrder.forEach(function (n) {
@@ -256,7 +257,7 @@
       if (a.path.getAttribute('class') !== cls) a.path.setAttribute('class', cls);
       if (a.lbl.textContent !== (a.order ? '#' + a.order + ' ' + txt : txt)) a.lbl.textContent = a.order ? '#' + a.order + ' ' + txt : txt;
       a.lbl.setAttribute('class', 'llabel' + (a.x > 0 ? ' on' : '') + (a.lbl.classList.contains('focus') ? ' focus' : ''));
-      var label = a.key.split('/')[1] + ' to ' + a.model + ' in ' + a.pool + ': ' + a.x + (p.unlimited ? ' active' : ' of ' + p.max_concurrency + ' active') + (a.order ? ' (failover target ' + a.order + ')' : '');
+      var label = a.key.split('/')[1] + ' to ' + a.model + ' in ' + a.pool + ': ' + a.x + (p.unlimited ? ' active' : ' of ' + p.max_concurrency + ' active') + (a.order ? ' (failover target ' + a.order + ')' : '') + (a.skipped ? ', skipped ' + a.skipped + ' (concurrency full)' : '');
       if (a.path.getAttribute('aria-label') !== label) a.path.setAttribute('aria-label', label);
     });
     for (var k in live.els.routes) {

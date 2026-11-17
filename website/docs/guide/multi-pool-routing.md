@@ -51,6 +51,30 @@ A request queues with, from strongest to weakest: the `X-Priority` request heade
 
 Config changes, including an endpoint's targets and mode, are applied on hot-reload; in-flight requests finish on the pools they started with. Pools whose upstream is unchanged keep their slots and queues across reloads.
 
+## Spilling over when a target's concurrency is full
+
+By default (`when_concurrency_full: wait`) a request that picks a target whose pool is full queues there, up to `queue_timeout`. Set `when_concurrency_full: skip` on a target to make the request go to the next target immediately instead:
+
+```yaml
+endpoints:
+  anthropic:
+    haiku:
+      mode: failover
+      targets:
+        - {pool: nevermetered-anthropic, target_model: qwen3.8-27b, when_concurrency_full: skip}
+        - {pool: claude-subscription, target_model: "claude-haiku-5-5@low"}
+```
+
+Exact semantics of `skip`:
+
+- The target is used only if its pool (or concurrency group) has a free slot **and** nobody is already waiting in that pool's queue (it never jumps the queue). Otherwise it is passed over at once and nothing is left queued.
+- In `failover` mode the next target in list order is tried; in `least-inflight` and `round-robin` a skipped target is excluded from the request's candidates.
+- The **last target of an endpoint is never skipped**: if every earlier target was skipped, the request waits on it. `when_concurrency_full: skip` on the last target is therefore treated as `wait` (`checker` warns about it).
+- Pools without a concurrency limit are never full. Concurrency groups count the whole group. With Valkey coordination the check is one atomic call across all pods.
+- A skip is not an error: it does not trigger failover accounting, and a target that failed is not retried. Priorities and aging of `wait` targets are unchanged.
+- An unknown value is a config load error; the option exists on targets only, not on pools. It applies on hot reload.
+- `/api/state` (dashboard) reports `when_concurrency_full` and a per-target `skipped_concurrency_full` counter (this pod, since start); the Live View link tooltip shows "skipped N (concurrency full)". A skipped target never increments the in-flight count.
+
 `target_model` is an opaque string passed upstream unchanged. A suffix such as `@low`, `@medium` or `@high` (e.g. `claude-sonnet-5-5@medium`) has no meaning to the proxy; interpreting it is up to the upstream.
 
 The dashboard shows each endpoint's mode and targets with their upstream host names.

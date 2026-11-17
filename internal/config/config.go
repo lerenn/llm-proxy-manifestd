@@ -225,7 +225,21 @@ type Target struct {
 	// Priority, when set, overrides the endpoint priority for requests
 	// queued on this target.
 	Priority *int `yaml:"priority"`
+	// WhenConcurrencyFull says what a request does when this target's pool (or
+	// concurrency group) has no free slot: "wait" (default) queues on it,
+	// "skip" tries the next target at once. The last target of an endpoint is
+	// never skipped: a request that skipped every other target waits on it.
+	WhenConcurrencyFull string `yaml:"when_concurrency_full"`
 }
+
+// When-busy behaviours of a target.
+const (
+	WhenConcurrencyFullWait = "wait"
+	WhenConcurrencyFullSkip = "skip"
+)
+
+// Skips reports whether the target is configured with when_concurrency_full: skip.
+func (t Target) Skips() bool { return t.WhenConcurrencyFull == WhenConcurrencyFullSkip }
 
 // QueuePriority returns the queue priority of target i of e.
 func (e Endpoint) QueuePriority(i int) int {
@@ -268,6 +282,14 @@ func (c *Config) Warnings() []string {
 	var out []string
 	if v := c.valkey(); v != nil && v.LeaseTTL < Duration(3*time.Second) {
 		out = append(out, fmt.Sprintf("coordination.valkey.lease_ttl %s is below 3s: a slow Valkey round trip may expire live leases", v.LeaseTTL.Std()))
+	}
+	for _, proto := range Protocols {
+		for _, n := range c.EndpointNames(proto) {
+			e := c.Endpoints[proto][n]
+			if last := len(e.Targets) - 1; e.Targets[last].Skips() {
+				out = append(out, fmt.Sprintf("endpoint %q (%s): the last target has when_concurrency_full: skip, which has no effect there: the last target is never skipped and requests wait on it", n, proto))
+			}
+		}
 	}
 	a, o := c.Endpoints[ProtocolAnthropic], c.Endpoints[ProtocolOpenAI]
 	if len(a) == 0 || len(o) == 0 {
@@ -507,6 +529,13 @@ func (c *Config) validateEndpoint(label, proto string, e *Endpoint) error {
 		}
 		if pc.Protocol != proto {
 			return fmt.Errorf("%s: targets[%d]: pool %q has protocol %q, want %q", label, i, t.Pool, pc.Protocol, proto)
+		}
+		switch t.WhenConcurrencyFull {
+		case "":
+			e.Targets[i].WhenConcurrencyFull = WhenConcurrencyFullWait
+		case WhenConcurrencyFullWait, WhenConcurrencyFullSkip:
+		default:
+			return fmt.Errorf("%s: targets[%d]: unknown when_concurrency_full %q (want %s or %s)", label, i, t.WhenConcurrencyFull, WhenConcurrencyFullWait, WhenConcurrencyFullSkip)
 		}
 		k := key{t.Pool, t.TargetModel}
 		if seen[k] {
