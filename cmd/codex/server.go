@@ -17,6 +17,8 @@ import (
 type Server struct {
 	Bin       string
 	CodexHome string
+	tokens    *tokenSource
+	upstream  string                                                    // override of the Codex backend URL (tests)
 	run       func(context.Context, Spec, func(string)) (Result, error) // swappable in tests
 }
 
@@ -25,6 +27,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ready", s.ready)
 	mux.HandleFunc("POST /v1/chat/completions", s.chat)
+	mux.HandleFunc("POST /v1/responses", s.responses)
 	return mux
 }
 

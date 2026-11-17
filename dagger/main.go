@@ -119,7 +119,7 @@ func (m *LlmProxyManifestd) PublishChart(
 }
 
 // adapterImage builds the adapter image for one platform. name is the adapter
-// directory under cmd/ (e.g. "claude").
+// directory under cmd/ (e.g. "codex").
 func adapterImage(source *dagger.Directory, name string, platform dagger.Platform) *dagger.Container {
 	return source.DockerBuild(dagger.DirectoryDockerBuildOpts{
 		Platform:   platform,
@@ -136,7 +136,7 @@ func (m *LlmProxyManifestd) BuildAdapter(
 	// +ignore=[".git", "website/node_modules", "website/.vitepress/dist", "website/.vitepress/cache"]
 	source *dagger.Directory,
 	// Adapter name (directory under cmd/)
-	// +default="claude"
+	// +default="codex"
 	name string,
 ) (string, error) {
 	return adapterImage(source, name, "linux/amd64").
@@ -154,7 +154,7 @@ func (m *LlmProxyManifestd) PublishAdapterImage(
 	// +ignore=[".git", "website/node_modules", "website/.vitepress/dist", "website/.vitepress/cache"]
 	source *dagger.Directory,
 	// Adapter name (directory under cmd/)
-	// +default="claude"
+	// +default="codex"
 	name string,
 	// Image tag, e.g. v0.1.0
 	tag string,

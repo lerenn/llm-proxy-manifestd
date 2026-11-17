@@ -28,7 +28,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{/*
-Providers: entries of .Values.providers. Types claude / codex = CLI adapter sidecar (+PVC);
+Providers: entries of .Values.providers. Type codex = CLI adapter sidecar (+PVC);
 types api / anthropic-api / openai-api = pool(s) only (no container).
 Returns a JSON list [{name, type, port, maxConcurrency, ...}] sorted by name.
 Ports are deterministic: providersBasePort + index among sidecar providers in name order, unless the
@@ -55,10 +55,10 @@ provider sets `port` explicitly.
 {{- fail (printf "providers.%s: maxConcurrency must be >= 0 (0 or omitted = unlimited)" $name) -}}
 {{- end -}}
 {{- $entry := dict "name" $name "type" $type "maxConcurrency" (int ($a.maxConcurrency | default 0)) "provider" $a -}}
-{{- if or (eq $type "claude") (eq $type "codex") -}}
+{{- if eq $type "codex" -}}
 {{- $_ := set $entry "sidecar" true -}}
-{{- $_ := set $entry "protocol" (ternary "anthropic" "openai" (eq $type "claude")) -}}
-{{- $_ := set $entry "homeEnv" (ternary "CLAUDE_CONFIG_DIR" "CODEX_HOME" (eq $type "claude")) -}}
+{{- $_ := set $entry "protocol" "openai" -}}
+{{- $_ := set $entry "homeEnv" "CODEX_HOME" -}}
 {{- $_ := set $entry "dataDir" (printf "/data/%s" $type) -}}
 {{- $_ := set $entry "port" (int ($a.port | default (add $base $sidecars))) -}}
 {{- $sidecars = add1 $sidecars -}}
@@ -117,7 +117,7 @@ provider sets `port` explicitly.
 {{- $_ := set $entry "secretKey" $sec.key -}}
 {{- $_ := set $entry "envName" (printf "PROVIDER_%s_API_KEY" (upper (replace "-" "_" $name))) -}}
 {{- else -}}
-{{- fail (printf "providers.%s: unsupported type %q (valid types: claude, codex, api, anthropic-api, openai-api)" $name $type) -}}
+{{- fail (printf "providers.%s: unsupported type %q (valid types: codex, api, anthropic-api, openai-api)" $name $type) -}}
 {{- end -}}
 {{- $out = append $out $entry -}}
 {{- end -}}
@@ -151,14 +151,14 @@ provider sets `port` explicitly.
 {{- $m -}}
 {{- end -}}
 
-{{/* "true" when subscription providers run in their own Deployments (adapters.mode=separate and at least one claude/codex provider). */}}
+{{/* "true" when subscription providers run in their own Deployments (adapters.mode=separate and at least one codex provider). */}}
 {{- define "llm-proxy-manifestd.separate" -}}
 {{- if eq (include "llm-proxy-manifestd.adaptersMode" .) "separate" -}}
 {{- range (include "llm-proxy-manifestd.providers" . | fromJsonArray) -}}{{- if .sidecar -}}true{{- end -}}{{- end -}}
 {{- end -}}
 {{- end -}}
 
-{{/* "true" when adapter sidecars live in the proxy pod (adapters.mode=sidecar and at least one claude/codex provider). */}}
+{{/* "true" when adapter sidecars live in the proxy pod (adapters.mode=sidecar and at least one codex provider). */}}
 {{- define "llm-proxy-manifestd.inPodAdapters" -}}
 {{- if eq (include "llm-proxy-manifestd.adaptersMode" .) "sidecar" -}}
 {{- range (include "llm-proxy-manifestd.providers" . | fromJsonArray) -}}{{- if .sidecar -}}true{{- end -}}{{- end -}}

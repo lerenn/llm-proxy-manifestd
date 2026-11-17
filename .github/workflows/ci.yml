@@ -46,7 +46,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        adapter: [claude, codex]
+        adapter: [codex]
     steps:
       - uses: actions/checkout@v4
       - name: Build ${{ matrix.adapter }} adapter image
