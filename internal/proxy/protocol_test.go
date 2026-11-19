@@ -103,6 +103,108 @@ func TestProtocolRoutingAndAuth(t *testing.T) {
 	}
 }
 
+func TestResponsesLongFunctionNamesAliasedForGenericOpenAIProviders(t *testing.T) {
+	long := "mcp__codex_apps__codex_document_control___execute_document_command"
+	var received []map[string]any
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode upstream request: %v", err)
+			return
+		}
+		received = append(received, req)
+		w.Header().Set("Content-Type", "text/event-stream")
+		if len(received) == 1 {
+			_, _ = io.WriteString(w, "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"name\":\""+receivedName(req)+"\",\"call_id\":\"call-1\"}}\n\ndata: [DONE]\n\n")
+			return
+		}
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer up.Close()
+	// The test upstream stands in for the first (generic API) target of an
+	// OpenAI Responses endpoint, not the subscription Codex adapter.
+	yml := `server: {queue_timeout: '500ms'}
+pools:
+  api: {upstream_url: '` + up.URL + `', protocol: openai, max_concurrency: 0}
+endpoints:
+  openai:
+    fast: {targets: [{pool: api, target_model: qwen} ]}
+`
+	l, _ := protoLoader(t, yml)
+	srv := httptest.NewServer(New(l.State, quiet()))
+	defer srv.Close()
+
+	first := post(t, srv.URL+"/v1/responses", `{"model":"fast","input":"probe","tools":[{"type":"function","name":"`+long+`","parameters":{"type":"object"}}],"tool_choice":{"type":"function","name":"`+long+`"}}`, nil)
+	firstBody, readErr := io.ReadAll(first.Body)
+	first.Body.Close()
+	if first.StatusCode != http.StatusOK {
+		t.Fatalf("first status=%d body=%s readErr=%v", first.StatusCode, firstBody, readErr)
+	}
+	if readErr != nil {
+		t.Fatalf("read first stream: %v body=%s", readErr, firstBody)
+	}
+	tools := received[0]["tools"].([]any)
+	alias := tools[0].(map[string]any)["name"].(string)
+	if alias == long || len(alias) > 64 || !validResponsesFunctionName(alias) {
+		t.Fatalf("upstream function name %q is invalid", alias)
+	}
+	if received[0]["tool_choice"].(map[string]any)["name"] != alias {
+		t.Fatalf("tool choice name=%v, want alias %q", received[0]["tool_choice"].(map[string]any)["name"], alias)
+	}
+	if !strings.Contains(string(firstBody), `"name":"`+long+`"`) {
+		t.Fatalf("client response did not restore original name: %s", firstBody)
+	}
+
+	continuation := `{"model":"fast","input":[{"type":"function_call","name":"` + long + `","call_id":"call-1","arguments":"{}"},{"type":"function_call_output","call_id":"call-1","output":"done"}],"tools":[{"type":"function","name":"` + long + `","parameters":{"type":"object"}}]}`
+	second := post(t, srv.URL+"/v1/responses", continuation, nil)
+	io.Copy(io.Discard, second.Body)
+	second.Body.Close()
+	if second.StatusCode != http.StatusOK || len(received) != 2 {
+		t.Fatalf("continuation status=%d upstream requests=%d", second.StatusCode, len(received))
+	}
+	input := received[1]["input"].([]any)
+	if input[0].(map[string]any)["name"] != alias {
+		t.Fatalf("continuation name=%v, want alias %q", input[0].(map[string]any)["name"], alias)
+	}
+	if input[1].(map[string]any)["type"] != "function_call_output" || input[1].(map[string]any)["output"] != "done" {
+		t.Fatalf("function output changed: %#v", input[1])
+	}
+}
+
+func TestResponsesValidFunctionNameIsUnchanged(t *testing.T) {
+	const name = "mcp__codex_apps__short_tool"
+	body := []byte(`{"model":"fast","tools":[{"type":"function","name":"` + name + `"}]}`)
+	got, aliases, err := aliasResponsesTools(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(aliases) != 0 || string(got) != string(body) {
+		t.Fatalf("valid request changed: aliases=%v body=%s", aliases, got)
+	}
+}
+
+func TestResponsesFunctionNameAliasRestoredInJSONResponse(t *testing.T) {
+	long := "mcp__codex_apps__codex_document_control___execute_document_command"
+	forwardedBody, aliases, err := aliasResponsesTools([]byte(`{"tools":[{"type":"function","name":"` + long + `"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var forwarded map[string]any
+	if err := json.Unmarshal(forwardedBody, &forwarded); err != nil {
+		t.Fatal(err)
+	}
+	alias := forwarded["tools"].([]any)[0].(map[string]any)["name"].(string)
+	response := []byte(`{"output":[{"type":"function_call","name":"` + alias + `"}]}`)
+	got := restoreResponsesJSON(response, aliases)
+	if !strings.Contains(string(got), `"name":"`+long+`"`) {
+		t.Fatalf("JSON response did not restore original name: %s", got)
+	}
+}
+
+func receivedName(req map[string]any) string {
+	return req["tools"].([]any)[0].(map[string]any)["name"].(string)
+}
+
 func TestMissingEndpointErrorShapes(t *testing.T) {
 	var h atomic.Int32
 	u := recorder("x", &h, 200, nil)

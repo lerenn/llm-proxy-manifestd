@@ -280,6 +280,7 @@ func (h *Handler) proxy(w http.ResponseWriter, r *http.Request) {
 	rt := &failoverTransport{
 		h: h, st: st, ep: ep, proto: proto, model: model, prioOverride: prioOverride,
 		obj: obj, body: body, rc: rc, rr: h.rrCounter(key),
+		path: r.URL.Path,
 	}
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -340,6 +341,7 @@ type failoverTransport struct {
 	prioOverride *int   // X-Priority, when sent
 	obj          map[string]json.RawMessage
 	body         []byte // original body
+	path         string
 	rc           *routeCounters
 	rr           *atomic.Uint64
 	counted      map[int]bool // targets already counted as skipped_concurrency_full
@@ -354,18 +356,27 @@ func (t *failoverTransport) priority(i int) int {
 
 // bodyFor returns the request body for target i, with the model rewritten to
 // the target's target_model when it differs.
-func (t *failoverTransport) bodyFor(i int) ([]byte, error) {
+func (t *failoverTransport) bodyFor(i int) ([]byte, map[string]string, error) {
 	tm := t.ep.Targets[i].TargetModel
-	if tm == "" || tm == t.model {
-		return t.body, nil
+	body := t.body
+	if tm != "" && tm != t.model {
+		raw, _ := json.Marshal(tm)
+		obj := make(map[string]json.RawMessage, len(t.obj))
+		for k, v := range t.obj {
+			obj[k] = v
+		}
+		obj["model"] = raw
+		var err error
+		body, err = json.Marshal(obj)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
-	raw, _ := json.Marshal(tm)
-	obj := make(map[string]json.RawMessage, len(t.obj))
-	for k, v := range t.obj {
-		obj[k] = v
+	if t.proto == config.ProtocolOpenAI && t.path == "/v1/responses" {
+		aliased, names, err := aliasResponsesTools(body)
+		return aliased, names, err
 	}
-	obj["model"] = raw
-	return json.Marshal(obj)
+	return body, nil, nil
 }
 
 // order returns the remaining targets (indexes into ep.Targets) in the order
@@ -529,7 +540,7 @@ func (t *failoverTransport) RoundTrip(req *http.Request) (*http.Response, error)
 				out.Header.Set("X-Api-Key", pc.APIKey)
 			}
 		}
-		body, err := t.bodyFor(idx)
+		body, aliases, err := t.bodyFor(idx)
 		if err != nil {
 			release()
 			return nil, err
@@ -561,6 +572,28 @@ func (t *failoverTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		}
 		if resp.StatusCode >= 500 {
 			t.rc.errors.Add(1)
+		}
+		if len(aliases) > 0 {
+			if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+				resp.Body = &aliasRestoreReadCloser{ReadCloser: resp.Body, aliases: aliases}
+			} else {
+				responseBody, readErr := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				responseBody = restoreResponsesJSON(responseBody, aliases)
+				reader := io.Reader(bytes.NewReader(responseBody))
+				if readErr != nil {
+					// Headers were already returned by the upstream. Preserve its
+					// partial body and terminal read error; retrying another target
+					// here could execute the same request twice.
+					reader = io.MultiReader(reader, terminalErrorReader{err: readErr})
+				}
+				resp.Body = io.NopCloser(reader)
+			}
+			// Restoring the longer client-facing name changes the byte length.
+			// Let ReverseProxy stream with chunked encoding instead of forwarding
+			// the upstream Content-Length for the aliased payload.
+			resp.Header.Del("Content-Length")
+			resp.ContentLength = -1
 		}
 		resp.Header.Set("X-Queue-Wait-Ms", strconv.FormatInt(wait.Milliseconds(), 10))
 		resp.Header.Set("X-Pool-Name", name)
