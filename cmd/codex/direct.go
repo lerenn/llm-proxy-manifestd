@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/lerenn/llm-proxy-manifestd/internal/adapter/common"
 )
@@ -24,7 +28,34 @@ const (
 	codexTokenURL     = "https://auth.openai.com/oauth/token"
 	codexClientID     = "app_EMoamEEZ73f0CkXaXp7hrann"
 	refreshSkew       = 5 * time.Minute
+	maxFunctionName   = 64
+	functionAliasSize = 32
 )
+
+// Function names in OpenAI Responses are limited to 64 ASCII letters,
+// digits, underscores and hyphens. MCP flattening can exceed that limit.
+// Keep short, valid names untouched and map only invalid names to a stable
+// digest alias; the original name remains local to this request and is used
+// to restore streamed calls for the client.
+func functionAlias(name string) string {
+	if len(name) <= maxFunctionName && validFunctionName(name) {
+		return name
+	}
+	sum := sha256.Sum256([]byte(name))
+	return "mcp_" + hex.EncodeToString(sum[:])[:functionAliasSize-len("mcp_")]
+}
+
+func validFunctionName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-') {
+			return false
+		}
+	}
+	return true
+}
 
 // authFile mirrors $CODEX_HOME/auth.json written by `codex login`.
 // Unknown fields are preserved on rewrite via Raw.
@@ -159,7 +190,7 @@ func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid_request_error", "cannot read body")
 		return
 	}
-	body, err := prepareResponsesBody(raw)
+	body, aliases, err := prepareResponsesBody(raw)
 	if err != nil {
 		writeErr(w, 400, "invalid_request_error", err.Error())
 		return
@@ -199,36 +230,49 @@ func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(status)
 	fl, _ := w.(http.Flusher)
-	buf := make([]byte, 32<<10)
-	for {
-		n, rerr := resp.Body.Read(buf)
-		if n > 0 {
-			_, _ = w.Write(buf[:n])
-			if fl != nil {
-				fl.Flush()
-			}
-		}
-		if rerr != nil {
-			return
+	if len(aliases) == 0 {
+		_, _ = io.Copy(flushWriter{w, fl}, resp.Body)
+		return
+	}
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 32<<10), 16<<20)
+	for scanner.Scan() {
+		line := restoreFunctionAliases(scanner.Text(), aliases)
+		_, _ = fmt.Fprintln(w, line)
+		if fl != nil {
+			fl.Flush()
 		}
 	}
+}
+
+type flushWriter struct {
+	w http.ResponseWriter
+	f http.Flusher
+}
+
+func (fw flushWriter) Write(p []byte) (int, error) {
+	n, err := fw.w.Write(p)
+	if fw.f != nil {
+		fw.f.Flush()
+	}
+	return n, err
 }
 
 // prepareResponsesBody applies the Codex backend's requirements: the model's
 // "@effort" suffix becomes reasoning.effort, store is false and stream is true
 // (the backend only serves streams), and instructions must be present.
-func prepareResponsesBody(raw []byte) ([]byte, error) {
+func prepareResponsesBody(raw []byte) ([]byte, map[string]string, error) {
 	var m map[string]any
 	if err := json.Unmarshal(raw, &m); err != nil {
-		return nil, fmt.Errorf("invalid JSON body: %w", err)
+		return nil, nil, fmt.Errorf("invalid JSON body: %w", err)
 	}
 	model, _ := m["model"].(string)
 	if model == "" {
-		return nil, errors.New("model is required")
+		return nil, nil, errors.New("model is required")
 	}
 	name, effort, err := common.SplitModel(model)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	m["model"] = name
 	if effort != "" {
@@ -246,7 +290,75 @@ func prepareResponsesBody(raw []byte) ([]byte, error) {
 	for _, k := range []string{"max_output_tokens", "temperature", "top_p", "metadata", "user", "previous_response_id"} {
 		delete(m, k)
 	}
-	return json.Marshal(m)
+	aliases := map[string]string{}
+	if tools, ok := m["tools"].([]any); ok {
+		for _, item := range tools {
+			tool, ok := item.(map[string]any)
+			if !ok || tool["type"] != "function" {
+				continue
+			}
+			original, ok := tool["name"].(string)
+			if !ok || original == "" {
+				continue
+			}
+			alias := functionAlias(original)
+			if alias != original {
+				aliases[alias] = original
+				tool["name"] = alias
+			}
+		}
+	}
+	if input, ok := m["input"].([]any); ok {
+		for _, item := range input {
+			entry, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			if entry["type"] == "function_call" {
+				if alias, ok := entry["name"].(string); ok {
+					if original, found := aliases[alias]; found {
+						entry["name"] = functionAlias(original)
+					}
+				}
+			}
+		}
+	}
+	b, err := json.Marshal(m)
+	return b, aliases, err
+}
+
+func restoreFunctionAliases(line string, aliases map[string]string) string {
+	if len(aliases) == 0 || !utf8.ValidString(line) || !strings.HasPrefix(line, "data: ") {
+		return line
+	}
+	data := strings.TrimPrefix(line, "data: ")
+	if data == "[DONE]" {
+		return line
+	}
+	var payload map[string]any
+	if json.Unmarshal([]byte(data), &payload) != nil {
+		return line
+	}
+	restorePayloadName(payload, aliases)
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return line
+	}
+	return "data: " + string(encoded)
+}
+
+func restorePayloadName(payload map[string]any, aliases map[string]string) {
+	if name, ok := payload["name"].(string); ok {
+		if original, found := aliases[name]; found {
+			payload["name"] = original
+		}
+	}
+	if delta, ok := payload["delta"].(map[string]any); ok {
+		restorePayloadName(delta, aliases)
+	}
+	if item, ok := payload["item"].(map[string]any); ok {
+		restorePayloadName(item, aliases)
+	}
 }
 
 func decodeSegment(s string) ([]byte, error) {
