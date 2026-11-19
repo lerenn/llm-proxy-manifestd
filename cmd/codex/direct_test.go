@@ -81,7 +81,7 @@ func TestResponsesLongToolNameRoundTripsAcrossContinuation(t *testing.T) {
 		t.Fatalf("streamed call name not restored: %s", got)
 	}
 
-	continuation := `{"model":"gpt-6.1-sol","input":[{"type":"function_call","name":"` + alias + `","call_id":"call-long","arguments":"{}"},{"type":"function_call_output","call_id":"call-long","output":"done"}],"tools":[{"type":"function","name":"` + long + `","parameters":{}}]}`
+	continuation := `{"model":"gpt-6.1-sol","input":[{"type":"function_call","name":"` + long + `","call_id":"call-long","arguments":"{}"},{"type":"function_call_output","call_id":"call-long","output":"done"}],"tools":[{"type":"function","name":"` + long + `","parameters":{}}]}`
 	second, secondNames, err := prepareResponsesBody([]byte(continuation))
 	if err != nil {
 		t.Fatal(err)
@@ -93,8 +93,59 @@ func TestResponsesLongToolNameRoundTripsAcrossContinuation(t *testing.T) {
 		t.Fatal(err)
 	}
 	input := forwarded["input"].([]any)
-	if input[0].(map[string]any)["name"] != alias || input[1].(map[string]any)["call_id"] != "call-long" {
-		t.Fatalf("continuation names not restored: %s", second)
+	if input[0].(map[string]any)["name"] != alias || input[0].(map[string]any)["call_id"] != "call-long" || input[1].(map[string]any)["type"] != "function_call_output" || input[1].(map[string]any)["call_id"] != "call-long" {
+		t.Fatalf("continuation names or outputs not preserved: %s", second)
+	}
+}
+
+func TestResponsesHTTPLongToolNameRoundTrip(t *testing.T) {
+	long := "mcp__codex_apps__codex_document_control___execute_document_command"
+	alias := functionAlias(long)
+	var upstreamBodies []map[string]any
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode upstream request: %v", err)
+			return
+		}
+		upstreamBodies = append(upstreamBodies, body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		if len(upstreamBodies) == 1 {
+			_, _ = io.WriteString(w, "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"name\":\""+alias+"\",\"call_id\":\"call-long\"}}\n\n")
+			return
+		}
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer up.Close()
+	home := t.TempDir()
+	tok := fakeJWT(time.Now().Add(time.Hour).Unix())
+	if err := os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"tokens":{"access_token":"`+tok+`","account_id":"acct"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{CodexHome: home, upstream: up.URL}
+	post := func(body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+		s.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("code=%d body=%q", rec.Code, rec.Body.String())
+		}
+		return rec
+	}
+	first := post(`{"model":"gpt-6.1-sol","input":"read document","tools":[{"type":"function","name":"` + long + `","parameters":{"type":"object"}}]}`)
+	if !strings.Contains(first.Body.String(), `"name":"`+long+`"`) {
+		t.Fatalf("first response did not restore original name: %s", first.Body.String())
+	}
+	post(`{"model":"gpt-6.1-sol","input":[{"type":"function_call","name":"` + long + `","call_id":"call-long","arguments":"{}"},{"type":"function_call_output","call_id":"call-long","output":"done"}],"tools":[{"type":"function","name":"` + long + `","parameters":{"type":"object"}}]}`)
+	if len(upstreamBodies) != 2 {
+		t.Fatalf("upstream request count=%d", len(upstreamBodies))
+	}
+	input := upstreamBodies[1]["input"].([]any)
+	if input[0].(map[string]any)["name"] != alias || input[0].(map[string]any)["call_id"] != "call-long" {
+		t.Fatalf("upstream continuation call not aliased: %#v", input[0])
+	}
+	if input[1].(map[string]any)["type"] != "function_call_output" || input[1].(map[string]any)["call_id"] != "call-long" || input[1].(map[string]any)["output"] != "done" {
+		t.Fatalf("upstream function output changed: %#v", input[1])
 	}
 }
 

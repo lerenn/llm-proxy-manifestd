@@ -315,9 +315,10 @@ func prepareResponsesBody(raw []byte) ([]byte, map[string]string, error) {
 				continue
 			}
 			if entry["type"] == "function_call" {
-				if alias, ok := entry["name"].(string); ok {
-					if original, found := aliases[alias]; found {
-						entry["name"] = functionAlias(original)
+				if original, ok := entry["name"].(string); ok {
+					entry["name"] = functionAlias(original)
+					if alias := functionAlias(original); alias != original {
+						aliases[alias] = original
 					}
 				}
 			}
