@@ -90,6 +90,20 @@ func (c *Coordinator) Close() error { return c.rdb.Close() }
 // Ping checks connectivity (used by tests and diagnostics).
 func (c *Coordinator) Ping(ctx context.Context) error { return c.rdb.Ping(ctx).Err() }
 
+// SetValue stores an expiring application value under the configured key prefix.
+func (c *Coordinator) SetValue(ctx context.Context, key, value string, ttl time.Duration) error {
+	return c.rdb.Set(ctx, c.k(key, "value"), value, ttl).Err()
+}
+
+// GetValue reads an application value under the configured key prefix.
+func (c *Coordinator) GetValue(ctx context.Context, key string) (string, bool, error) {
+	value, err := c.rdb.Get(ctx, c.k(key, "value")).Result()
+	if errors.Is(err, redis.Nil) {
+		return "", false, nil
+	}
+	return value, err == nil, err
+}
+
 func (c *Coordinator) isDown() bool { return time.Now().UnixNano() < c.down.Load() }
 
 func (c *Coordinator) markDown(err error) {
