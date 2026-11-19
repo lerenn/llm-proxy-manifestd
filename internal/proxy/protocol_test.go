@@ -7,10 +7,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/lerenn/llm-proxy-manifestd/internal/config"
 )
 
@@ -106,6 +108,7 @@ func TestProtocolRoutingAndAuth(t *testing.T) {
 func TestResponsesLongFunctionNamesAliasedForGenericOpenAIProviders(t *testing.T) {
 	long := "mcp__codex_apps__codex_document_control___execute_document_command"
 	var received []map[string]any
+	var alias string
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -114,16 +117,26 @@ func TestResponsesLongFunctionNamesAliasedForGenericOpenAIProviders(t *testing.T
 		}
 		received = append(received, req)
 		w.Header().Set("Content-Type", "text/event-stream")
-		if len(received) == 1 {
-			_, _ = io.WriteString(w, "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"name\":\""+receivedName(req)+"\",\"call_id\":\"call-1\"}}\n\ndata: [DONE]\n\n")
-			return
+		responseID := "resp-1"
+		if len(received) == 2 {
+			responseID = "resp-2"
+		} else if len(received) == 3 {
+			responseID = "resp-3"
 		}
-		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		_, _ = io.WriteString(w, "data: {\"type\":\"response.created\",\"response\":{\"id\":\""+responseID+"\"}}\n\n")
+		if len(received) == 1 || len(received) == 2 || len(received) == 3 {
+			if len(received) == 1 {
+				alias = receivedName(req)
+			}
+			_, _ = io.WriteString(w, "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"name\":\""+alias+"\",\"call_id\":\"call-"+strconv.Itoa(len(received))+"\"}}\n\ndata: [DONE]\n\n")
+		}
 	}))
 	defer up.Close()
 	// The test upstream stands in for the first (generic API) target of an
 	// OpenAI Responses endpoint, not the subscription Codex adapter.
+	valkey := miniredis.RunT(t)
 	yml := `server: {queue_timeout: '500ms'}
+coordination: {valkey: {address: '` + valkey.Addr() + `'}}
 pools:
   api: {upstream_url: '` + up.URL + `', protocol: openai, max_concurrency: 0}
 endpoints:
@@ -133,6 +146,9 @@ endpoints:
 	l, _ := protoLoader(t, yml)
 	srv := httptest.NewServer(New(l.State, quiet()))
 	defer srv.Close()
+	otherLoader, _ := protoLoader(t, yml)
+	continuationSrv := httptest.NewServer(New(otherLoader.State, quiet()))
+	defer continuationSrv.Close()
 
 	first := post(t, srv.URL+"/v1/responses", `{"model":"fast","input":"probe","tools":[{"type":"function","name":"`+long+`","parameters":{"type":"object"}}],"tool_choice":{"type":"function","name":"`+long+`"}}`, nil)
 	firstBody, readErr := io.ReadAll(first.Body)
@@ -144,7 +160,7 @@ endpoints:
 		t.Fatalf("read first stream: %v body=%s", readErr, firstBody)
 	}
 	tools := received[0]["tools"].([]any)
-	alias := tools[0].(map[string]any)["name"].(string)
+	alias = tools[0].(map[string]any)["name"].(string)
 	if alias == long || len(alias) > 64 || !validResponsesFunctionName(alias) {
 		t.Fatalf("upstream function name %q is invalid", alias)
 	}
@@ -155,19 +171,31 @@ endpoints:
 		t.Fatalf("client response did not restore original name: %s", firstBody)
 	}
 
-	continuation := `{"model":"fast","input":[{"type":"function_call","name":"` + long + `","call_id":"call-1","arguments":"{}"},{"type":"function_call_output","call_id":"call-1","output":"done"}],"tools":[{"type":"function","name":"` + long + `","parameters":{"type":"object"}}]}`
-	second := post(t, srv.URL+"/v1/responses", continuation, nil)
-	io.Copy(io.Discard, second.Body)
+	continuation := `{"model":"fast","previous_response_id":"resp-1","input":[{"type":"function_call_output","call_id":"call-1","output":"done"}]}`
+	second := post(t, continuationSrv.URL+"/v1/responses", continuation, nil)
+	secondBody, readErr := io.ReadAll(second.Body)
 	second.Body.Close()
-	if second.StatusCode != http.StatusOK || len(received) != 2 {
+	if readErr != nil || second.StatusCode != http.StatusOK || len(received) != 2 {
 		t.Fatalf("continuation status=%d upstream requests=%d", second.StatusCode, len(received))
 	}
-	input := received[1]["input"].([]any)
-	if input[0].(map[string]any)["name"] != alias {
-		t.Fatalf("continuation name=%v, want alias %q", input[0].(map[string]any)["name"], alias)
+	if received[1]["previous_response_id"] != "resp-1" {
+		t.Fatalf("previous_response_id=%v", received[1]["previous_response_id"])
 	}
-	if input[1].(map[string]any)["type"] != "function_call_output" || input[1].(map[string]any)["output"] != "done" {
-		t.Fatalf("function output changed: %#v", input[1])
+	input := received[1]["input"].([]any)
+	if len(input) != 1 || input[0].(map[string]any)["type"] != "function_call_output" || input[0].(map[string]any)["output"] != "done" {
+		t.Fatalf("function output changed: %#v", input)
+	}
+	if !strings.Contains(string(secondBody), `"name":"`+long+`"`) {
+		t.Fatalf("continuation response did not restore original name: %s", secondBody)
+	}
+	third := post(t, srv.URL+"/v1/responses", `{"model":"fast","previous_response_id":"resp-2","input":[{"type":"function_call_output","call_id":"call-2","output":"done again"}]}`, nil)
+	thirdBody, readErr := io.ReadAll(third.Body)
+	third.Body.Close()
+	if readErr != nil || third.StatusCode != http.StatusOK || len(received) != 3 {
+		t.Fatalf("second continuation status=%d upstream requests=%d readErr=%v", third.StatusCode, len(received), readErr)
+	}
+	if !strings.Contains(string(thirdBody), `"name":"`+long+`"`) {
+		t.Fatalf("second continuation response did not retain original name: %s", thirdBody)
 	}
 }
 

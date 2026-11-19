@@ -36,14 +36,16 @@ type Handler struct {
 	transport http.RoundTripper
 	mux       *http.ServeMux
 
-	version      string
-	started      time.Time
-	reloadStatus func() config.ReloadStatus
-	endpoints    sync.Map // counterKey -> *routeCounters
-	rr           sync.Map // counterKey -> *atomic.Uint64 (round-robin cursor)
-	dashboard    http.Handler
-	keys         keyStore
-	clients      sync.Map // client name -> *atomic.Int64 (requests)
+	version            string
+	started            time.Time
+	reloadStatus       func() config.ReloadStatus
+	endpoints          sync.Map // counterKey -> *routeCounters
+	rr                 sync.Map // counterKey -> *atomic.Uint64 (round-robin cursor)
+	dashboard          http.Handler
+	keys               keyStore
+	clients            sync.Map // client name -> *atomic.Int64 (requests)
+	responseNames      sync.Map // upstream Responses response ID -> expiring function-name aliases
+	responseNameWrites atomic.Uint64
 }
 
 // Option customises a Handler.
@@ -373,7 +375,7 @@ func (t *failoverTransport) bodyFor(i int) ([]byte, map[string]string, error) {
 		}
 	}
 	if t.proto == config.ProtocolOpenAI && t.path == "/v1/responses" {
-		aliased, names, err := aliasResponsesTools(body)
+		aliased, names, err := t.h.aliasResponsesRequest(body)
 		return aliased, names, err
 	}
 	return body, nil, nil
@@ -575,11 +577,15 @@ func (t *failoverTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		}
 		if len(aliases) > 0 {
 			if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
-				resp.Body = &aliasRestoreReadCloser{ReadCloser: resp.Body, aliases: aliases}
+				resp.Body = &aliasRestoreReadCloser{ReadCloser: resp.Body, aliases: aliases, onResponseID: t.h.saveResponseNames}
 			} else {
 				responseBody, readErr := io.ReadAll(resp.Body)
 				resp.Body.Close()
 				responseBody = restoreResponsesJSON(responseBody, aliases)
+				if err := t.h.saveResponseNames(responseIDFromJSON(responseBody), aliases); err != nil {
+					release()
+					return nil, err
+				}
 				reader := io.Reader(bytes.NewReader(responseBody))
 				if readErr != nil {
 					// Headers were already returned by the upstream. Preserve its
